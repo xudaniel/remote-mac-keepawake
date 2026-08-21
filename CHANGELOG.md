@@ -23,6 +23,10 @@ All notable changes follow semantic versioning.
   build and lint, and additive D1 migrations without duplicate branch runs.
 - Release archives now align CLI, heartbeat, and dashboard versions and
   include the complete dashboard source and migrations.
+- Dashboard build dependencies are refreshed, the audited dependency tree has
+  no known vulnerabilities, and CI rejects moderate-or-higher npm advisories.
+- D1 migrations use reviewed sequential SQL plus a legacy-data migration test,
+  avoiding an unnecessary vulnerable schema-generator dependency.
 
 ## [1.2.0] - 2026-08-20
 

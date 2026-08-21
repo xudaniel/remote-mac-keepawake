@@ -2,6 +2,7 @@
 /* eslint-disable jsx-a11y/label-has-associated-control -- localized tx() text is inside each wrapping label */
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Language = "en" | "zh";
 type AuthState = "checking" | "authorized" | "token-required";
@@ -156,6 +157,7 @@ function mergeSamples(older: Sample[], newer: Sample[]) {
 }
 
 export default function Dashboard() {
+  const router = useRouter();
   const [language, setLanguage] = useState<Language>("zh");
   const [authState, setAuthState] = useState<AuthState>("checking");
   const [token, setToken] = useState("");
@@ -376,7 +378,7 @@ export default function Dashboard() {
 
   function signOut() {
     if (status?.viewer_auth === "siwc") {
-      window.location.assign("/signout-with-chatgpt?return_to=%2F");
+      router.push("/signout-with-chatgpt?return_to=%2F");
       return;
     }
     sessionStorage.removeItem("mac-pulse-view-token");

@@ -38,12 +38,20 @@ Run the dashboard suite with Node.js 22.13 or later:
 ```bash
 cd dashboard
 npm ci
+npm audit --audit-level=moderate
 npm run lint
 npm test
 ```
 
 Hosted CI remains authoritative for ShellCheck and the supported macOS runner
 matrix.
+
+For a dashboard schema change, add the next sequential SQL file under
+`dashboard/drizzle/`, update `dashboard/db/schema.ts`, and extend
+`dashboard/tests/migrations.test.mjs`. Migrations must be additive unless a
+separate, tested recovery plan is part of the pull request. A schema-generator
+CLI is deliberately not installed, which keeps the development dependency
+surface smaller and makes the reviewed SQL the source of truth.
 
 ## Pull requests
 

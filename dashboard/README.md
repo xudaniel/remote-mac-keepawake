@@ -76,13 +76,19 @@ pagination, export, and deletion lifecycle.
 ## Local development
 
 Copy `.env.example` to `.env.local`, choose two different secrets, optionally
-set an alert webhook, generate the D1 migration after schema changes, and run:
+set an alert webhook, and run:
 
 ```bash
 npm ci
 npm run dev
 npm test
 ```
+
+Database changes use reviewed, sequential SQL files in `drizzle/`. Add the next
+numbered migration, update `db/schema.ts`, and extend the migration test. The
+repository intentionally does not install a schema-generator CLI, keeping the
+development dependency surface smaller while the migration test protects old
+history.
 
 For the bundled local preview defaults only, use `local-view-token` and
 `local-ingest-token`. Production refuses to use these defaults.

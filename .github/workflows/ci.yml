@@ -60,6 +60,8 @@ jobs:
           cache-dependency-path: dashboard/package-lock.json
       - name: Install pinned dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Audit dependency vulnerabilities
+        run: npm audit --audit-level=moderate
       - name: Lint dashboard source
         run: npm run lint
       - name: Build and test dashboard
