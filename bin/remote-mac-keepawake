@@ -1,104 +1,179 @@
 #!/bin/bash
 
 # Remote Mac KeepAwake
-# A small launchd manager for macOS's built-in caffeinate command.
+# Reliable launchd management for macOS's built-in caffeinate command.
 
 set -u
+set -o pipefail
 
 readonly PROGRAM_NAME="remote-mac-keepawake"
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 readonly LABEL="com.xudaniel.remote-mac-keepawake"
 readonly TEST_ROOT="${RMKA_TEST_ROOT:-}"
 readonly DRY_RUN="${RMKA_DRY_RUN:-0}"
+readonly FAIL_STEP="${RMKA_TEST_FAIL_STEP:-}"
+
+resolve_managed_user() {
+  if [[ -n "$TEST_ROOT" ]]; then
+    printf 'test-user\n'
+  elif [[ "$(/usr/bin/id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER:-}" != "root" ]]; then
+    printf '%s\n' "$SUDO_USER"
+  else
+    /usr/bin/id -un
+  fi
+}
+
+resolve_managed_home() {
+  local account="$1"
+  local account_home=""
+  if [[ -n "$TEST_ROOT" ]]; then
+    printf '%s/user\n' "$TEST_ROOT"
+    return
+  fi
+  if [[ "$account" == "$(/usr/bin/id -un)" ]]; then
+    printf '%s\n' "$HOME"
+    return
+  fi
+  account_home="$(/usr/bin/dscl . -read "/Users/$account" NFSHomeDirectory 2>/dev/null |
+    /usr/bin/awk '{print $2; exit}')"
+  [[ -n "$account_home" ]] || account_home="/Users/$account"
+  printf '%s\n' "$account_home"
+}
+
+MANAGED_USER="$(resolve_managed_user)"
+readonly MANAGED_USER
+if [[ -n "$TEST_ROOT" ]]; then
+  readonly MANAGED_UID="501"
+else
+  MANAGED_UID="$(/usr/bin/id -u "$MANAGED_USER")"
+  readonly MANAGED_UID
+fi
+USER_BASE="$(resolve_managed_home "$MANAGED_USER")"
+readonly USER_BASE
+readonly USER_PLIST="$USER_BASE/Library/LaunchAgents/$LABEL.plist"
+readonly USER_LOG_DIR="$USER_BASE/Library/Logs/RemoteMacKeepAwake"
+readonly USER_CLI="$USER_BASE/.local/bin/$PROGRAM_NAME"
 
 if [[ -n "$TEST_ROOT" ]]; then
-  readonly USER_BASE="$TEST_ROOT/user"
-  readonly USER_PLIST="$USER_BASE/Library/LaunchAgents/$LABEL.plist"
-  readonly USER_LOG_DIR="$USER_BASE/Library/Logs/RemoteMacKeepAwake"
   readonly SYSTEM_PLIST="$TEST_ROOT/Library/LaunchDaemons/$LABEL.plist"
-  readonly SYSTEM_LOG_DIR="$TEST_ROOT/var/log"
+  readonly SYSTEM_LOG_DIR="$TEST_ROOT/var/log/RemoteMacKeepAwake"
+  readonly SYSTEM_CLI="$TEST_ROOT/usr/local/bin/$PROGRAM_NAME"
 else
-  readonly USER_BASE="$HOME"
-  readonly USER_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-  readonly USER_LOG_DIR="$HOME/Library/Logs/RemoteMacKeepAwake"
   readonly SYSTEM_PLIST="/Library/LaunchDaemons/$LABEL.plist"
-  readonly SYSTEM_LOG_DIR="/var/log"
+  readonly SYSTEM_LOG_DIR="/var/log/RemoteMacKeepAwake"
+  readonly SYSTEM_CLI="/usr/local/bin/$PROGRAM_NAME"
 fi
 
 usage() {
   cat <<'EOF'
-Remote Mac KeepAwake keeps a Mac available for remote access by running
-macOS's built-in `caffeinate -i` under launchd.
+Remote Mac KeepAwake runs macOS's built-in `caffeinate -i` under launchd.
 
 Usage:
   remote-mac-keepawake install [--user|--system]
+  remote-mac-keepawake migrate --system --yes
+  remote-mac-keepawake recovery-check --system [--json]
   remote-mac-keepawake uninstall [--user|--system]
-  remote-mac-keepawake start [--user|--system]
-  remote-mac-keepawake stop [--user|--system]
-  remote-mac-keepawake restart [--user|--system]
-  remote-mac-keepawake status [--user|--system] [--json]
-  remote-mac-keepawake doctor [--user|--system]
-  remote-mac-keepawake logs [--user|--system]
+  remote-mac-keepawake start|stop|restart [--user|--system]
+  remote-mac-keepawake status [--user|--system] [--json] [--watch]
+  remote-mac-keepawake health [--user|--system] [--json] [--network]
+                              [--chrome] [--watch] [--interval SECONDS]
+                              [--notify] [--webhook HTTPS_URL]
+  remote-mac-keepawake doctor|logs|self-test [--user|--system]
+  remote-mac-keepawake upgrade [--user|--system] --from PATH
   remote-mac-keepawake version
 
 Modes:
-  --user    Install for the current signed-in user. No sudo required.
-  --system  Install at boot for all users. Run the command with sudo.
+  --user    Starts after the managed user signs in. No sudo required.
+  --system  Starts during boot. Run mutating commands with sudo.
 
-If no mode is supplied, an existing installation is detected; otherwise
---user is used.
+Health checks are local and collect no telemetry. Network and Chrome checks
+are opt-in. An HTTPS webhook is contacted only when explicitly configured.
+
+Health exit codes: 0 healthy, 1 unavailable, 2 degraded.
 EOF
 }
 
 die() {
-  printf 'Error: %s\n' "$*" >&2
+  if [[ "${json_output:-0}" == "1" ]]; then
+    printf '{"ok":false,"command":"%s","error":"%s"}\n' \
+      "$(json_escape "${command_name:-unknown}")" "$(json_escape "$*")" >&2
+  else
+    printf 'Error: %s\n' "$*" >&2
+  fi
   exit 1
+}
+
+warn() {
+  printf 'Warning: %s\n' "$*" >&2
+}
+
+fail_if_requested() {
+  [[ "$FAIL_STEP" != "$1" ]]
 }
 
 xml_escape() {
   printf '%s' "$1" | /usr/bin/sed \
-    -e 's/&/\&amp;/g' \
-    -e 's/</\&lt;/g' \
-    -e 's/>/\&gt;/g' \
-    -e 's/"/\&quot;/g' \
-    -e "s/'/\\\&apos;/g"
+    -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' -e "s/'/\\\&apos;/g"
 }
 
+json_escape() {
+  printf '%s' "$1" | /usr/bin/sed \
+    -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
+}
+
+command_name="${1:-help}"
+[[ $# -eq 0 ]] || shift
 mode=""
 json_output=0
-command_name="${1:-help}"
-if [[ $# -gt 0 ]]; then
-  shift
-fi
+watch_output=0
+check_network=0
+check_chrome=0
+local_notify=0
+interval=60
+webhook_url=""
+confirmed=0
+upgrade_from=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user)
-      [[ -z "$mode" || "$mode" == "user" ]] || die "Choose only one install mode."
+      [[ -z "$mode" || "$mode" == "user" ]] || die "Choose only one mode."
       mode="user"
       ;;
     --system)
-      [[ -z "$mode" || "$mode" == "system" ]] || die "Choose only one install mode."
+      [[ -z "$mode" || "$mode" == "system" ]] || die "Choose only one mode."
       mode="system"
       ;;
-    --json)
-      json_output=1
+    --json) json_output=1 ;;
+    --watch) watch_output=1 ;;
+    --network) check_network=1 ;;
+    --chrome) check_chrome=1 ;;
+    --notify) local_notify=1 ;;
+    --yes) confirmed=1 ;;
+    --interval|--webhook|--from)
+      option="$1"
+      [[ $# -ge 2 ]] || die "$option requires a value."
+      case "$option" in
+        --interval) interval="$2" ;;
+        --webhook) webhook_url="$2" ;;
+        --from) upgrade_from="$2" ;;
+      esac
+      shift
       ;;
-    -h|--help)
-      command_name="help"
-      ;;
-    *)
-      die "Unknown option: $1"
-      ;;
+    -h|--help) command_name="help" ;;
+    *) die "Unknown option: $1" ;;
   esac
   shift
 done
 
-detect_mode() {
-  if [[ -n "$mode" ]]; then
-    return
-  fi
+case "$interval" in ''|*[!0-9]*) die "--interval must be a positive integer." ;; esac
+[[ "$interval" -gt 0 ]] || die "--interval must be greater than zero."
+[[ -z "$webhook_url" || "$webhook_url" == https://* ]] ||
+  die "Webhook URLs must use HTTPS."
 
+detect_mode() {
+  [[ -n "$mode" ]] && return
   if [[ -f "$SYSTEM_PLIST" ]]; then
     mode="system"
   elif [[ -f "$USER_PLIST" ]]; then
@@ -107,35 +182,43 @@ detect_mode() {
     mode="user"
   fi
 }
-
 detect_mode
 
-if [[ "$mode" == "system" ]]; then
-  plist_path="$SYSTEM_PLIST"
-  launch_domain="system"
-  service_target="system/$LABEL"
-  stdout_path="$SYSTEM_LOG_DIR/remote-mac-keepawake.out.log"
-  stderr_path="$SYSTEM_LOG_DIR/remote-mac-keepawake.err.log"
-else
-  plist_path="$USER_PLIST"
-  launch_domain="gui/$(/usr/bin/id -u)"
-  service_target="$launch_domain/$LABEL"
-  stdout_path="$USER_LOG_DIR/out.log"
-  stderr_path="$USER_LOG_DIR/err.log"
-fi
+configure_mode() {
+  if [[ "$mode" == "system" ]]; then
+    plist_path="$SYSTEM_PLIST"
+    log_dir="$SYSTEM_LOG_DIR"
+    cli_path="$SYSTEM_CLI"
+    launch_domain="system"
+    service_target="system/$LABEL"
+  else
+    plist_path="$USER_PLIST"
+    log_dir="$USER_LOG_DIR"
+    cli_path="$USER_CLI"
+    launch_domain="gui/$MANAGED_UID"
+    service_target="$launch_domain/$LABEL"
+  fi
+  stdout_path="$log_dir/out.log"
+  stderr_path="$log_dir/err.log"
+  watch_log_path="$log_dir/health-watch.jsonl"
+}
+configure_mode
 
 require_macos() {
-  [[ "$(/usr/bin/uname -s)" == "Darwin" || -n "$TEST_ROOT" ]] || \
+  [[ "$(/usr/bin/uname -s)" == "Darwin" || -n "$TEST_ROOT" ]] ||
     die "This tool supports macOS only."
 }
 
 require_system_privileges() {
   if [[ "$mode" == "system" && -z "$TEST_ROOT" && "$(/usr/bin/id -u)" -ne 0 ]]; then
-    die "System mode requires administrator access. Run: sudo $0 $command_name --system"
+    die "System mode requires administrator access. Run with sudo."
   fi
 }
 
 launchctl_run() {
+  local step="$1"
+  shift
+  fail_if_requested "$step" || return 1
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '+ launchctl'
     printf ' %q' "$@"
@@ -151,209 +234,609 @@ render_plist() {
   local escaped_stderr
   escaped_stdout="$(xml_escape "$stdout_path")"
   escaped_stderr="$(xml_escape "$stderr_path")"
-
-  cat > "$output_path" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/caffeinate</string>
-    <string>-i</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ProcessType</key>
-  <string>Background</string>
-  <key>ThrottleInterval</key>
-  <integer>5</integer>
-  <key>StandardOutPath</key>
-  <string>$escaped_stdout</string>
-  <key>StandardErrorPath</key>
-  <string>$escaped_stderr</string>
-</dict>
-</plist>
-EOF
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    printf '%s\n' '<plist version="1.0"><dict>'
+    printf '%s\n' '  <key>Label</key>'
+    printf '  <string>%s</string>\n' "$LABEL"
+    printf '%s\n' '  <key>ProgramArguments</key><array>'
+    printf '%s\n' '    <string>/usr/bin/caffeinate</string>'
+    printf '%s\n' '    <string>-i</string>'
+    printf '%s\n' '  </array>'
+    printf '%s\n' '  <key>RunAtLoad</key><true/>'
+    printf '%s\n' '  <key>KeepAlive</key><true/>'
+    printf '%s\n' '  <key>ProcessType</key><string>Background</string>'
+    printf '%s\n' '  <key>ThrottleInterval</key><integer>5</integer>'
+    printf '%s\n' '  <key>StandardOutPath</key>'
+    printf '  <string>%s</string>\n' "$escaped_stdout"
+    printf '%s\n' '  <key>StandardErrorPath</key>'
+    printf '  <string>%s</string>\n' "$escaped_stderr"
+    printf '%s\n' '</dict></plist>'
+  } > "$output_path"
 }
 
 service_is_loaded() {
-  [[ "$DRY_RUN" != "1" ]] && /bin/launchctl print "$service_target" >/dev/null 2>&1
+  if [[ "$DRY_RUN" == "1" ]]; then
+    [[ -f "$plist_path" ]]
+  else
+    /bin/launchctl print "$service_target" >/dev/null 2>&1
+  fi
 }
 
-load_service() {
-  if service_is_loaded; then
-    launchctl_run bootout "$launch_domain" "$plist_path" >/dev/null 2>&1 || true
+unload_service_best_effort() {
+  service_is_loaded || return 0
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  /bin/launchctl bootout "$launch_domain" "$plist_path" >/dev/null 2>&1 || true
+}
+
+activate_service() {
+  unload_service_best_effort
+  launchctl_run bootstrap bootstrap "$launch_domain" "$plist_path" || return 1
+  launchctl_run enable enable "$service_target" >/dev/null || return 1
+  launchctl_run kickstart kickstart -k "$service_target" || return 1
+}
+
+collect_status() {
+  local details=""
+  status_installed="false"
+  status_state="not-loaded"
+  status_pid=""
+  status_assertion="false"
+  [[ -f "$plist_path" ]] && status_installed="true"
+  if [[ "$DRY_RUN" == "1" && "$status_installed" == "true" ]]; then
+    status_state="running"
+    status_pid="4242"
+  else
+    details="$(/bin/launchctl print "$service_target" 2>/dev/null || true)"
+    if [[ -n "$details" ]]; then
+      status_state="$(printf '%s\n' "$details" |
+        /usr/bin/awk '/^[[:space:]]*state = / { print $3; exit }')"
+      status_pid="$(printf '%s\n' "$details" |
+        /usr/bin/awk '/^[[:space:]]*pid = / { print $3; exit }')"
+      [[ -n "$status_state" ]] || status_state="loaded"
+    fi
   fi
-  launchctl_run bootstrap "$launch_domain" "$plist_path"
-  launchctl_run enable "$service_target" >/dev/null 2>&1 || true
-  launchctl_run kickstart -k "$service_target"
+  if [[ -n "$status_pid" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      [[ "$FAIL_STEP" == "assertion" ]] || status_assertion="true"
+    elif /usr/bin/pmset -g assertions 2>/dev/null |
+      /usr/bin/grep -F "pid $status_pid(caffeinate)" >/dev/null; then
+      status_assertion="true"
+    fi
+  fi
+}
+
+service_is_healthy() {
+  collect_status
+  [[ "$status_installed" == "true" && "$status_state" == "running" &&
+     "$status_assertion" == "true" ]]
+}
+
+verify_service() {
+  local attempt=1
+  while [[ "$attempt" -le 5 ]]; do
+    service_is_healthy && return 0
+    [[ "$DRY_RUN" == "1" ]] || /bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+validate_installation_files() {
+  local plist_mode=""
+  local cli_mode=""
+  [[ -f "$plist_path" && -f "$cli_path" ]] || return 1
+  /usr/bin/plutil -lint "$plist_path" >/dev/null || return 1
+  plist_mode="$(/usr/bin/stat -f '%Lp' "$plist_path" 2>/dev/null || true)"
+  cli_mode="$(/usr/bin/stat -f '%Lp' "$cli_path" 2>/dev/null || true)"
+  [[ "$plist_mode" == "644" && "$cli_mode" == "755" && -x "$cli_path" ]] || return 1
+  if [[ "$mode" == "system" && -z "$TEST_ROOT" ]]; then
+    [[ "$(/usr/bin/stat -f '%Su:%Sg' "$plist_path")" == "root:wheel" ]] || return 1
+    [[ "$(/usr/bin/stat -f '%Su:%Sg' "$cli_path")" == "root:wheel" ]] || return 1
+  fi
+}
+
+backup_file() {
+  local source_path="$1"
+  local backup_path="$2"
+  [[ -f "$source_path" ]] || return 2
+  /bin/cp -p "$source_path" "$backup_path"
+}
+
+restore_file() {
+  local destination="$1"
+  local backup="$2"
+  local existed="$3"
+  if [[ "$existed" == "1" && -f "$backup" ]]; then
+    /bin/mv -f "$backup" "$destination"
+  else
+    /bin/rm -f "$destination" "$backup"
+  fi
+}
+
+install_service() {
+  local allow_other_mode="${1:-0}"
+  local plist_tmp=""
+  local cli_tmp=""
+  local plist_backup="${plist_path}.backup.$$"
+  local cli_backup="${cli_path}.backup.$$"
+  local plist_existed=0
+  local cli_existed=0
+  local install_failed=0
+
+  require_macos
+  require_system_privileges
+  if [[ "$allow_other_mode" != "1" ]]; then
+    [[ "$mode" != "user" || ! -f "$SYSTEM_PLIST" ]] ||
+      die "A system installation exists. Use it or uninstall it first."
+    [[ "$mode" != "system" || ! -f "$USER_PLIST" ]] ||
+      die "A user installation exists. Use 'migrate --system --yes' for a safe handoff."
+  fi
+
+  /bin/mkdir -p "$(/usr/bin/dirname "$plist_path")" "$log_dir" \
+    "$(/usr/bin/dirname "$cli_path")" ||
+    die "Could not create installation directories."
+  plist_tmp="$(/usr/bin/mktemp "${plist_path}.new.XXXXXX")" ||
+    die "Could not stage the launchd plist."
+  cli_tmp="$(/usr/bin/mktemp "${cli_path}.new.XXXXXX")" || {
+    /bin/rm -f "$plist_tmp"
+    die "Could not stage the CLI."
+  }
+
+  render_plist "$plist_tmp"
+  /usr/bin/plutil -lint "$plist_tmp" >/dev/null || install_failed=1
+  fail_if_requested cli_copy || install_failed=1
+  if [[ "$install_failed" == "0" ]]; then
+    /bin/cp "$0" "$cli_tmp" || install_failed=1
+    /bin/chmod 0755 "$cli_tmp" || install_failed=1
+    /bin/bash -n "$cli_tmp" || install_failed=1
+  fi
+  if [[ "$install_failed" != "0" ]]; then
+    /bin/rm -f "$plist_tmp" "$cli_tmp"
+    die "Staging failed; the existing service was not changed."
+  fi
+
+  if backup_file "$plist_path" "$plist_backup"; then plist_existed=1; fi
+  if backup_file "$cli_path" "$cli_backup"; then cli_existed=1; fi
+
+  if ! fail_if_requested install_plist ||
+     ! /usr/bin/install -m 0644 "$plist_tmp" "$plist_path" ||
+     ! /usr/bin/install -m 0755 "$cli_tmp" "$cli_path"; then
+    install_failed=1
+  fi
+  /bin/rm -f "$plist_tmp" "$cli_tmp"
+  if [[ "$mode" == "system" && -z "$TEST_ROOT" && "$install_failed" == "0" ]]; then
+    /usr/sbin/chown root:wheel "$plist_path" "$cli_path" || install_failed=1
+  fi
+  if [[ "$install_failed" == "0" ]]; then
+    validate_installation_files || install_failed=1
+  fi
+  if [[ "$install_failed" == "0" ]]; then
+    activate_service || install_failed=1
+  fi
+  if [[ "$install_failed" == "0" ]]; then
+    verify_service || install_failed=1
+  fi
+
+  if [[ "$install_failed" != "0" ]]; then
+    unload_service_best_effort
+    restore_file "$plist_path" "$plist_backup" "$plist_existed"
+    restore_file "$cli_path" "$cli_backup" "$cli_existed"
+    if [[ "$plist_existed" == "1" ]]; then
+      activate_service >/dev/null 2>&1 ||
+        warn "The previous plist was restored but could not be restarted."
+    fi
+    die "Installation failed verification and was rolled back."
+  fi
+
+  /bin/rm -f "$plist_backup" "$cli_backup"
+  printf 'Installed and verified %s %s in %s mode.\n' "$PROGRAM_NAME" "$VERSION" "$mode"
+  printf 'Stable CLI: %s\n' "$cli_path"
 }
 
 start_service() {
+  require_system_privileges
   [[ -f "$plist_path" ]] || die "Not installed in $mode mode. Run install first."
-  if ! service_is_loaded; then
-    launchctl_run bootstrap "$launch_domain" "$plist_path"
-  fi
-  launchctl_run enable "$service_target" >/dev/null 2>&1 || true
-  launchctl_run kickstart -k "$service_target"
-  printf 'Keep-awake service started (%s mode).\n' "$mode"
+  activate_service || die "launchd could not start the service."
+  verify_service || die "Service started but no caffeinate assertion was verified."
+  printf 'Keep-awake service started and verified (%s mode).\n' "$mode"
 }
 
 stop_service() {
+  require_system_privileges
   if service_is_loaded; then
-    launchctl_run bootout "$launch_domain" "$plist_path"
-  elif [[ "$DRY_RUN" == "1" ]]; then
-    launchctl_run bootout "$launch_domain" "$plist_path"
+    launchctl_run bootout bootout "$launch_domain" "$plist_path" ||
+      die "launchd could not stop the service; files were left intact."
   fi
   printf 'Keep-awake service stopped (%s mode).\n' "$mode"
 }
 
-install_service() {
-  require_macos
-  require_system_privileges
-
-  if [[ "$mode" == "user" && -f "$SYSTEM_PLIST" ]]; then
-    die "A system installation already exists. Uninstall it before installing user mode."
-  fi
-  if [[ "$mode" == "system" && -f "$USER_PLIST" ]]; then
-    die "A user installation already exists. Uninstall it before installing system mode."
-  fi
-
-  local temp_plist
-  temp_plist="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/remote-mac-keepawake.XXXXXX")" || \
-    die "Could not create a temporary plist."
-  trap '/bin/rm -f "$temp_plist"' EXIT
-
-  if [[ "$mode" == "system" ]]; then
-    /bin/mkdir -p "$(/usr/bin/dirname "$plist_path")" "$SYSTEM_LOG_DIR"
-  else
-    /bin/mkdir -p "$(/usr/bin/dirname "$plist_path")" "$USER_LOG_DIR"
-  fi
-
-  render_plist "$temp_plist"
-  /usr/bin/plutil -lint "$temp_plist" >/dev/null || die "Generated launchd plist is invalid."
-  /usr/bin/install -m 0644 "$temp_plist" "$plist_path"
-
-  if [[ "$mode" == "system" && -z "$TEST_ROOT" ]]; then
-    /usr/sbin/chown root:wheel "$plist_path"
-  fi
-
-  load_service
-  /bin/rm -f "$temp_plist"
-  trap - EXIT
-  printf 'Installed and started %s in %s mode.\n' "$PROGRAM_NAME" "$mode"
-  printf 'The Mac now holds an idle-sleep prevention assertion while this service is loaded.\n'
-}
-
 uninstall_service() {
+  local removed=0
   require_system_privileges
   if service_is_loaded; then
-    launchctl_run bootout "$launch_domain" "$plist_path" || true
+    launchctl_run bootout bootout "$launch_domain" "$plist_path" ||
+      die "launchd could not stop the service; uninstall was cancelled."
   fi
   if [[ -f "$plist_path" ]]; then
-    /bin/rm -f "$plist_path"
+    /bin/rm -f "$plist_path" || die "Could not remove $plist_path."
+    printf 'Removed: %s\n' "$plist_path"
+    removed=1
   fi
-  printf 'Uninstalled %s from %s mode.\n' "$PROGRAM_NAME" "$mode"
+  if [[ -f "$cli_path" ]]; then
+    /bin/rm -f "$cli_path" || die "Could not remove $cli_path."
+    printf 'Removed: %s\n' "$cli_path"
+    removed=1
+  fi
+  [[ "$removed" == "1" ]] || printf 'No owned installation files were present.\n'
+  printf 'Preserved logs: %s\n' "$log_dir"
+}
+
+status_json() {
+  collect_status
+  printf '{"version":"%s","installed":%s,"mode":"%s","service_state":"%s","pid":%s,"idle_sleep_prevented":%s}\n' \
+    "$VERSION" "$status_installed" "$mode" "$(json_escape "$status_state")" \
+    "${status_pid:-null}" "$status_assertion"
+}
+
+status_text() {
+  collect_status
+  printf 'Installed:             %s\n' "$status_installed"
+  printf 'Mode:                  %s\n' "$mode"
+  printf 'Service state:         %s\n' "$status_state"
+  printf 'PID:                   %s\n' "${status_pid:-none}"
+  printf 'Idle sleep prevented:  %s\n' "$status_assertion"
+  printf 'Plist:                 %s\n' "$plist_path"
+  printf 'Stable CLI:            %s\n' "$cli_path"
+}
+
+status_once() {
+  if [[ "$json_output" == "1" ]]; then status_json; else status_text; fi
+  [[ "$status_installed" == "true" && "$status_state" == "running" &&
+     "$status_assertion" == "true" ]]
 }
 
 status_service() {
-  local details=""
-  local state="not-loaded"
-  local pid=""
-  local assertion="false"
-  local installed="false"
-
-  [[ -f "$plist_path" ]] && installed="true"
-  details="$(/bin/launchctl print "$service_target" 2>/dev/null || true)"
-  if [[ -n "$details" ]]; then
-    state="$(printf '%s\n' "$details" | /usr/bin/awk '/^[[:space:]]*state = / { print $3; exit }')"
-    pid="$(printf '%s\n' "$details" | /usr/bin/awk '/^[[:space:]]*pid = / { print $3; exit }')"
+  local rc=0
+  if [[ "$watch_output" != "1" ]]; then
+    status_once
+    return
   fi
+  trap 'printf "\nStatus watch stopped.\n"; exit 0' INT TERM
+  while true; do
+    status_once
+    rc=$?
+    [[ "$DRY_RUN" == "1" ]] && return "$rc"
+    /bin/sleep "$interval"
+  done
+}
 
-  if [[ -n "$pid" ]] && /usr/bin/pmset -g assertions 2>/dev/null | \
-    /usr/bin/grep -Fq "pid $pid(caffeinate)"; then
-    assertion="true"
-  fi
+collect_health() {
+  local battery_output=""
+  local lid_output=""
+  collect_status
+  health_power_source="unknown"
+  health_battery_percent="null"
+  health_charging="null"
+  health_lid_closed="null"
+  health_network_available="null"
+  health_chrome_running="null"
 
-  if [[ "$json_output" == "1" ]]; then
-    printf '{"installed":%s,"mode":"%s","state":"%s","pid":%s,"idle_sleep_prevented":%s}\n' \
-      "$installed" "$mode" "$state" "${pid:-null}" "$assertion"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    health_power_source="AC Power"
+    health_battery_percent="100"
+    health_charging="true"
+    health_lid_closed="${RMKA_TEST_LID_CLOSED:-false}"
+    [[ "$check_network" == "1" ]] &&
+      health_network_available="${RMKA_TEST_NETWORK_AVAILABLE:-true}"
+    [[ "$check_chrome" == "1" ]] &&
+      health_chrome_running="${RMKA_TEST_CHROME_RUNNING:-true}"
   else
-    printf 'Installed:             %s\n' "$installed"
-    printf 'Mode:                  %s\n' "$mode"
-    printf 'Service state:         %s\n' "$state"
-    printf 'PID:                   %s\n' "${pid:-none}"
-    printf 'Idle sleep prevented:  %s\n' "$assertion"
-    printf 'Plist:                 %s\n' "$plist_path"
+    battery_output="$(/usr/bin/pmset -g batt 2>/dev/null || true)"
+    health_power_source="$(printf '%s\n' "$battery_output" |
+      /usr/bin/sed -n "s/^Now drawing from '\(.*\)'$/\1/p" |
+      /usr/bin/head -n 1)"
+    [[ -n "$health_power_source" ]] || health_power_source="unknown"
+    health_battery_percent="$(printf '%s\n' "$battery_output" |
+      /usr/bin/sed -n 's/.*[[:space:]]\([0-9][0-9]*\)%.*/\1/p' |
+      /usr/bin/head -n 1)"
+    [[ -n "$health_battery_percent" ]] || health_battery_percent="null"
+    if printf '%s\n' "$battery_output" | /usr/bin/grep -Eiq 'charging|charged'; then
+      health_charging="true"
+    elif [[ "$health_battery_percent" != "null" ]]; then
+      health_charging="false"
+    fi
+    lid_output="$(/usr/sbin/ioreg -r -k AppleClamshellState -d 4 2>/dev/null |
+      /usr/bin/grep -m 1 AppleClamshellState || true)"
+    if printf '%s\n' "$lid_output" | /usr/bin/grep -q '= Yes'; then
+      health_lid_closed="true"
+    elif printf '%s\n' "$lid_output" | /usr/bin/grep -q '= No'; then
+      health_lid_closed="false"
+    fi
+    if [[ "$check_network" == "1" ]]; then
+      if /sbin/route -n get default >/dev/null 2>&1 &&
+         /usr/bin/curl --fail --silent --head --connect-timeout 5 --max-time 10 \
+           https://www.apple.com/library/test/success.html >/dev/null 2>&1; then
+        health_network_available="true"
+      else
+        health_network_available="false"
+      fi
+    fi
+    if [[ "$check_chrome" == "1" ]]; then
+      if /usr/bin/pgrep -f 'remoting_host|Chrome Remote Desktop Host' >/dev/null 2>&1; then
+        health_chrome_running="true"
+      else
+        health_chrome_running="false"
+      fi
+    fi
   fi
 
-  [[ "$installed" == "true" && "$state" == "running" && "$assertion" == "true" ]]
+  case "$health_lid_closed" in true|false|null) ;; *) health_lid_closed="null" ;; esac
+  case "$health_network_available" in true|false|null) ;; *) health_network_available="null" ;; esac
+  case "$health_chrome_running" in true|false|null) ;; *) health_chrome_running="null" ;; esac
+
+  health_state="healthy"
+  health_code=0
+  if [[ "$status_installed" != "true" || "$status_state" != "running" ||
+        "$status_assertion" != "true" ]]; then
+    health_state="unavailable"
+    health_code=1
+  elif [[ "$health_lid_closed" == "true" ||
+          "$health_network_available" == "false" ||
+          "$health_chrome_running" == "false" ]]; then
+    health_state="degraded"
+    health_code=2
+  elif [[ "$health_battery_percent" != "null" &&
+          "$health_charging" == "false" &&
+          "$health_battery_percent" -le 20 ]]; then
+    health_state="degraded"
+    health_code=2
+  fi
+  health_timestamp="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+}
+
+health_json() {
+  printf '{"timestamp":"%s","version":"%s","health":"%s","mode":"%s","installed":%s,"service_state":"%s","pid":%s,"idle_sleep_prevented":%s,"power_source":"%s","battery_percent":%s,"charging":%s,"lid_closed":%s,"network_checked":%s,"network_available":%s,"chrome_checked":%s,"chrome_running":%s}\n' \
+    "$health_timestamp" "$VERSION" "$health_state" "$mode" "$status_installed" \
+    "$(json_escape "$status_state")" "${status_pid:-null}" "$status_assertion" \
+    "$(json_escape "$health_power_source")" "$health_battery_percent" \
+    "$health_charging" "$health_lid_closed" "$check_network" \
+    "$health_network_available" "$check_chrome" "$health_chrome_running"
+}
+
+health_text() {
+  local battery_text="unknown"
+  [[ "$health_battery_percent" == "null" ]] ||
+    battery_text="${health_battery_percent}%"
+  printf 'Health:                %s\n' "$health_state"
+  printf 'Mode:                  %s\n' "$mode"
+  printf 'Service state:         %s\n' "$status_state"
+  printf 'Idle sleep prevented:  %s\n' "$status_assertion"
+  printf 'Power source:          %s\n' "$health_power_source"
+  printf 'Battery:               %s\n' "$battery_text"
+  printf 'Lid closed:            %s\n' "$health_lid_closed"
+  [[ "$check_network" == "1" ]] &&
+    printf 'Network available:     %s\n' "$health_network_available"
+  [[ "$check_chrome" == "1" ]] &&
+    printf 'Google Chrome running: %s\n' "$health_chrome_running"
+  return 0
+}
+
+write_watch_log() {
+  local line="$1"
+  local bounded="${watch_log_path}.new.$$"
+  /bin/mkdir -p "$log_dir" || return 1
+  printf '%s\n' "$line" >> "$watch_log_path" || return 1
+  /usr/bin/tail -n 200 "$watch_log_path" > "$bounded" &&
+    /bin/mv -f "$bounded" "$watch_log_path"
+}
+
+send_webhook() {
+  local state="$1"
+  [[ -n "$webhook_url" ]] || return 0
+  /usr/bin/curl --fail --silent --show-error \
+    --connect-timeout 5 --max-time 10 \
+    -H 'Content-Type: application/json' \
+    -d "{\"service\":\"$PROGRAM_NAME\",\"health\":\"$state\",\"mode\":\"$mode\"}" \
+    "$webhook_url" >/dev/null
+}
+
+send_local_notification() {
+  local state="$1"
+  [[ "$local_notify" == "1" ]] || return 0
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  /usr/bin/osascript -e \
+    "display notification \"Health: $state\" with title \"Remote Mac KeepAwake\"" \
+    >/dev/null
+}
+
+health_service() {
+  local json_line=""
+  local previous_state=""
+  local rc=0
+  if [[ "$watch_output" != "1" ]]; then
+    collect_health
+    if [[ "$json_output" == "1" ]]; then health_json; else health_text; fi
+    return "$health_code"
+  fi
+  trap 'printf "\nHealth watch stopped.\n"; exit 0' INT TERM
+  while true; do
+    collect_health
+    rc="$health_code"
+    json_line="$(health_json)"
+    if [[ "$json_output" == "1" ]]; then printf '%s\n' "$json_line"; else health_text; fi
+    write_watch_log "$json_line" || warn "Could not update $watch_log_path"
+    if [[ "$health_state" != "$previous_state" ]]; then
+      send_local_notification "$health_state" || warn "Local notification failed."
+      send_webhook "$health_state" || warn "Health webhook delivery failed."
+      previous_state="$health_state"
+    fi
+    [[ "$DRY_RUN" == "1" ]] && return "$rc"
+    /bin/sleep "$interval"
+  done
+}
+
+migrate_service() {
+  local saved_mode="$mode"
+  [[ "$mode" == "system" ]] || die "Migration target must be --system."
+  [[ "$confirmed" == "1" ]] ||
+    die "Review the FileVault warning, then rerun with --yes."
+  require_system_privileges
+  [[ -f "$USER_PLIST" ]] ||
+    die "No user-mode installation was found for $MANAGED_USER."
+
+  # Leave the user service active until system mode has passed all checks.
+  install_service 1
+  mode="user"
+  configure_mode
+  if service_is_loaded; then
+    launchctl_run bootout bootout "$launch_domain" "$plist_path" ||
+      warn "System mode is healthy, but the old user service could not be unloaded."
+  fi
+  /bin/rm -f "$USER_PLIST" "$USER_CLI" ||
+    warn "System mode is healthy, but old user-mode files could not be removed."
+  mode="$saved_mode"
+  configure_mode
+  printf 'Migration complete: verified system mode before removing user mode.\n'
+  printf 'FileVault note: remote tools cannot pass the pre-boot unlock screen.\n'
+}
+
+recovery_check() {
+  local filevault="unknown"
+  [[ "$mode" == "system" ]] || die "Reboot recovery requires --system mode."
+  [[ -f "$plist_path" ]] || die "System LaunchDaemon is not installed."
+  validate_installation_files ||
+    die "LaunchDaemon ownership, permissions, executable mode, or plist syntax is invalid."
+  /usr/bin/grep -Fq '<key>RunAtLoad</key>' "$plist_path" ||
+    die "LaunchDaemon is missing RunAtLoad."
+  /usr/bin/grep -Fq '<key>KeepAlive</key>' "$plist_path" ||
+    die "LaunchDaemon is missing KeepAlive."
+  verify_service || die "System service or caffeinate assertion is not healthy."
+  if [[ -z "$TEST_ROOT" && -x /usr/bin/fdesetup ]]; then
+    case "$(/usr/bin/fdesetup status 2>/dev/null || true)" in
+      *'FileVault is On'*) filevault="on" ;;
+      *'FileVault is Off'*) filevault="off" ;;
+    esac
+  fi
+  if [[ "$json_output" == "1" ]]; then
+    printf '{"ok":true,"mode":"system","launch_domain":"system","run_at_load":true,"keep_alive":true,"service_state":"%s","pid":%s,"idle_sleep_prevented":true,"filevault":"%s"}\n' \
+      "$(json_escape "$status_state")" "${status_pid:-null}" "$filevault"
+  else
+    printf 'Reboot recovery readiness: ready\n'
+    printf 'Launch domain:            system\n'
+    printf 'RunAtLoad / KeepAlive:    true / true\n'
+    printf 'Service / assertion:      %s / true\n' "$status_state"
+    printf 'FileVault:                %s\n' "$filevault"
+    printf 'After reboot, rerun this command and expect every check above to pass.\n'
+  fi
 }
 
 doctor_service() {
   printf 'Remote Mac KeepAwake doctor\n'
   printf '===========================\n'
   /usr/bin/sw_vers 2>/dev/null || true
-  printf '\nPower source:\n'
-  /usr/bin/pmset -g batt 2>/dev/null || true
+  printf '\nLocal health (network and Chrome checks are opt-in):\n'
+  collect_health
+  health_text
   printf '\nConfigured power settings:\n'
   /usr/bin/pmset -g custom 2>/dev/null || true
-  printf '\nLid state (No means open):\n'
-  /usr/sbin/ioreg -r -k AppleClamshellState -d 4 2>/dev/null | \
-    /usr/bin/grep 'AppleClamshellState' || true
-  printf '\nKeep-awake service:\n'
-  status_service || true
-  printf '\nReminder: software cannot prevent power loss, network loss, a forced shutdown,\n'
-  printf 'or normal MacBook lid sleep. Keep the lid open and verify stable power.\n'
+  printf '\nSoftware cannot repair power, network, hardware, lid-sleep,\n'
+  printf 'or the FileVault pre-boot unlock screen.\n'
 }
 
 show_logs() {
-  printf 'stdout: %s\n' "$stdout_path"
-  [[ -f "$stdout_path" ]] && /usr/bin/tail -n 50 "$stdout_path"
-  printf 'stderr: %s\n' "$stderr_path"
-  [[ -f "$stderr_path" ]] && /usr/bin/tail -n 50 "$stderr_path"
+  local path=""
+  for path in "$stdout_path" "$stderr_path" "$watch_log_path"; do
+    printf '%s:\n' "$path"
+    [[ -f "$path" ]] && /usr/bin/tail -n 50 "$path"
+  done
+}
+
+self_test() {
+  local failed=0
+  printf 'CLI syntax:             '
+  if /bin/bash -n "$0"; then printf 'ok\n'; else printf 'failed\n'; failed=1; fi
+  printf 'caffeinate available:   '
+  if [[ -x /usr/bin/caffeinate || -n "$TEST_ROOT" ]]; then
+    printf 'ok\n'
+  else
+    printf 'failed\n'
+    failed=1
+  fi
+  if [[ -f "$plist_path" ]]; then
+    printf 'plist validation:       '
+    if /usr/bin/plutil -lint "$plist_path" >/dev/null; then
+      printf 'ok\n'
+    else
+      printf 'failed\n'
+      failed=1
+    fi
+    printf 'service verification:   '
+    if verify_service; then printf 'ok\n'; else printf 'failed\n'; failed=1; fi
+  else
+    printf 'installation:           not installed (%s mode)\n' "$mode"
+  fi
+  [[ "$failed" == "0" ]]
+}
+
+upgrade_service() {
+  local source="$upgrade_from"
+  local staged=""
+  local backup="${cli_path}.upgrade-backup.$$"
+  local source_version=""
+  require_system_privileges
+  [[ -n "$source" ]] || die "upgrade requires --from PATH."
+  [[ -f "$source" ]] || die "Upgrade source not found: $source"
+  [[ -f "$cli_path" ]] || die "Stable CLI not found. Run install first."
+  /bin/bash -n "$source" || die "Upgrade source has invalid shell syntax."
+  source_version="$(/usr/bin/awk -F'"' '/readonly VERSION=/{print $2; exit}' "$source")"
+  [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    die "Upgrade source does not declare a semantic version."
+  staged="$(/usr/bin/mktemp "${cli_path}.upgrade.XXXXXX")" ||
+    die "Could not stage the upgrade."
+  if ! /bin/cp "$source" "$staged" || ! /bin/chmod 0755 "$staged"; then
+    /bin/rm -f "$staged"
+    die "Could not stage the upgrade."
+  fi
+  if [[ "$("$staged" version 2>/dev/null)" != "$PROGRAM_NAME $source_version" ]]; then
+    /bin/rm -f "$staged"
+    die "Staged upgrade did not report its declared version."
+  fi
+  if ! /bin/cp -p "$cli_path" "$backup" ||
+     ! fail_if_requested upgrade_copy ||
+     ! /bin/mv -f "$staged" "$cli_path"; then
+    /bin/rm -f "$staged"
+    [[ -f "$backup" ]] && /bin/mv -f "$backup" "$cli_path"
+    die "Upgrade failed and the previous CLI was restored."
+  fi
+  if [[ "$("$cli_path" version 2>/dev/null)" != "$PROGRAM_NAME $source_version" ]]; then
+    /bin/mv -f "$backup" "$cli_path"
+    die "Upgrade verification failed and the previous CLI was restored."
+  fi
+  /bin/rm -f "$backup"
+  printf 'Upgraded stable CLI to %s and verified it.\n' "$source_version"
 }
 
 case "$command_name" in
-  install)
-    install_service
-    ;;
-  uninstall)
-    uninstall_service
-    ;;
-  start)
-    require_system_privileges
-    start_service
-    ;;
-  stop)
-    require_system_privileges
-    stop_service
-    ;;
+  install) install_service ;;
+  migrate) migrate_service ;;
+  recovery-check) recovery_check ;;
+  uninstall) uninstall_service ;;
+  start) start_service ;;
+  stop) stop_service ;;
   restart)
-    require_system_privileges
     stop_service
     start_service
     ;;
-  status)
-    status_service
-    ;;
-  doctor)
-    doctor_service
-    ;;
-  logs)
-    show_logs
-    ;;
-  version)
-    printf '%s %s\n' "$PROGRAM_NAME" "$VERSION"
-    ;;
-  help)
-    usage
-    ;;
+  status) status_service ;;
+  health) health_service ;;
+  doctor) doctor_service ;;
+  logs) show_logs ;;
+  self-test) self_test ;;
+  upgrade) upgrade_service ;;
+  version) printf '%s %s\n' "$PROGRAM_NAME" "$VERSION" ;;
+  help) usage ;;
   *)
     usage >&2
     die "Unknown command: $command_name"
