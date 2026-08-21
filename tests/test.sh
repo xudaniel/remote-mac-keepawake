@@ -32,7 +32,7 @@ printf '1. Shell syntax\n'
 /bin/bash -n "$CLI" || fail "CLI has invalid shell syntax"
 
 printf '2. User-mode installation\n'
-RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 "$CLI" install --user >/dev/null || \
+RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 /bin/bash "$CLI" install --user >/dev/null || \
   fail "User-mode dry-run install failed"
 user_plist="$TEST_AREA/user/Library/LaunchAgents/com.xudaniel.remote-mac-keepawake.plist"
 assert_file "$user_plist"
@@ -42,17 +42,17 @@ assert_contains "$user_plist" '<string>-i</string>'
 assert_contains "$user_plist" '<key>KeepAlive</key>'
 
 printf '3. Duplicate-mode protection\n'
-if RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 "$CLI" install --system >/dev/null 2>&1; then
+if RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 /bin/bash "$CLI" install --system >/dev/null 2>&1; then
   fail "System installation should be rejected while user mode exists"
 fi
 
 printf '4. User-mode uninstallation\n'
-RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 "$CLI" uninstall --user >/dev/null || \
+RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 /bin/bash "$CLI" uninstall --user >/dev/null || \
   fail "User-mode dry-run uninstall failed"
 assert_not_file "$user_plist"
 
 printf '5. System-mode installation\n'
-RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 "$CLI" install --system >/dev/null || \
+RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 /bin/bash "$CLI" install --system >/dev/null || \
   fail "System-mode dry-run install failed"
 system_plist="$TEST_AREA/Library/LaunchDaemons/com.xudaniel.remote-mac-keepawake.plist"
 assert_file "$system_plist"
@@ -60,7 +60,7 @@ assert_file "$system_plist"
 assert_contains "$system_plist" '<string>/usr/bin/caffeinate</string>'
 
 printf '6. System-mode uninstallation\n'
-RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 "$CLI" uninstall --system >/dev/null || \
+RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 /bin/bash "$CLI" uninstall --system >/dev/null || \
   fail "System-mode dry-run uninstall failed"
 assert_not_file "$system_plist"
 
