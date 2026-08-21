@@ -1,0 +1,361 @@
+#!/bin/bash
+
+# Remote Mac KeepAwake
+# A small launchd manager for macOS's built-in caffeinate command.
+
+set -u
+
+readonly PROGRAM_NAME="remote-mac-keepawake"
+readonly VERSION="1.0.0"
+readonly LABEL="com.xudaniel.remote-mac-keepawake"
+readonly TEST_ROOT="${RMKA_TEST_ROOT:-}"
+readonly DRY_RUN="${RMKA_DRY_RUN:-0}"
+
+if [[ -n "$TEST_ROOT" ]]; then
+  readonly USER_BASE="$TEST_ROOT/user"
+  readonly USER_PLIST="$USER_BASE/Library/LaunchAgents/$LABEL.plist"
+  readonly USER_LOG_DIR="$USER_BASE/Library/Logs/RemoteMacKeepAwake"
+  readonly SYSTEM_PLIST="$TEST_ROOT/Library/LaunchDaemons/$LABEL.plist"
+  readonly SYSTEM_LOG_DIR="$TEST_ROOT/var/log"
+else
+  readonly USER_BASE="$HOME"
+  readonly USER_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+  readonly USER_LOG_DIR="$HOME/Library/Logs/RemoteMacKeepAwake"
+  readonly SYSTEM_PLIST="/Library/LaunchDaemons/$LABEL.plist"
+  readonly SYSTEM_LOG_DIR="/var/log"
+fi
+
+usage() {
+  cat <<'EOF'
+Remote Mac KeepAwake keeps a Mac available for remote access by running
+macOS's built-in `caffeinate -i` under launchd.
+
+Usage:
+  remote-mac-keepawake install [--user|--system]
+  remote-mac-keepawake uninstall [--user|--system]
+  remote-mac-keepawake start [--user|--system]
+  remote-mac-keepawake stop [--user|--system]
+  remote-mac-keepawake restart [--user|--system]
+  remote-mac-keepawake status [--user|--system] [--json]
+  remote-mac-keepawake doctor [--user|--system]
+  remote-mac-keepawake logs [--user|--system]
+  remote-mac-keepawake version
+
+Modes:
+  --user    Install for the current signed-in user. No sudo required.
+  --system  Install at boot for all users. Run the command with sudo.
+
+If no mode is supplied, an existing installation is detected; otherwise
+--user is used.
+EOF
+}
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+xml_escape() {
+  printf '%s' "$1" | /usr/bin/sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\\\&apos;/g"
+}
+
+mode=""
+json_output=0
+command_name="${1:-help}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user)
+      [[ -z "$mode" || "$mode" == "user" ]] || die "Choose only one install mode."
+      mode="user"
+      ;;
+    --system)
+      [[ -z "$mode" || "$mode" == "system" ]] || die "Choose only one install mode."
+      mode="system"
+      ;;
+    --json)
+      json_output=1
+      ;;
+    -h|--help)
+      command_name="help"
+      ;;
+    *)
+      die "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+detect_mode() {
+  if [[ -n "$mode" ]]; then
+    return
+  fi
+
+  if [[ -f "$SYSTEM_PLIST" ]]; then
+    mode="system"
+  elif [[ -f "$USER_PLIST" ]]; then
+    mode="user"
+  else
+    mode="user"
+  fi
+}
+
+detect_mode
+
+if [[ "$mode" == "system" ]]; then
+  plist_path="$SYSTEM_PLIST"
+  launch_domain="system"
+  service_target="system/$LABEL"
+  stdout_path="$SYSTEM_LOG_DIR/remote-mac-keepawake.out.log"
+  stderr_path="$SYSTEM_LOG_DIR/remote-mac-keepawake.err.log"
+else
+  plist_path="$USER_PLIST"
+  launch_domain="gui/$(/usr/bin/id -u)"
+  service_target="$launch_domain/$LABEL"
+  stdout_path="$USER_LOG_DIR/out.log"
+  stderr_path="$USER_LOG_DIR/err.log"
+fi
+
+require_macos() {
+  [[ "$(/usr/bin/uname -s)" == "Darwin" || -n "$TEST_ROOT" ]] || \
+    die "This tool supports macOS only."
+}
+
+require_system_privileges() {
+  if [[ "$mode" == "system" && -z "$TEST_ROOT" && "$(/usr/bin/id -u)" -ne 0 ]]; then
+    die "System mode requires administrator access. Run: sudo $0 $command_name --system"
+  fi
+}
+
+launchctl_run() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ launchctl'
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+  /bin/launchctl "$@"
+}
+
+render_plist() {
+  local output_path="$1"
+  local escaped_stdout
+  local escaped_stderr
+  escaped_stdout="$(xml_escape "$stdout_path")"
+  escaped_stderr="$(xml_escape "$stderr_path")"
+
+  cat > "$output_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>$escaped_stdout</string>
+  <key>StandardErrorPath</key>
+  <string>$escaped_stderr</string>
+</dict>
+</plist>
+EOF
+}
+
+service_is_loaded() {
+  [[ "$DRY_RUN" != "1" ]] && /bin/launchctl print "$service_target" >/dev/null 2>&1
+}
+
+load_service() {
+  if service_is_loaded; then
+    launchctl_run bootout "$launch_domain" "$plist_path" >/dev/null 2>&1 || true
+  fi
+  launchctl_run bootstrap "$launch_domain" "$plist_path"
+  launchctl_run enable "$service_target" >/dev/null 2>&1 || true
+  launchctl_run kickstart -k "$service_target"
+}
+
+start_service() {
+  [[ -f "$plist_path" ]] || die "Not installed in $mode mode. Run install first."
+  if ! service_is_loaded; then
+    launchctl_run bootstrap "$launch_domain" "$plist_path"
+  fi
+  launchctl_run enable "$service_target" >/dev/null 2>&1 || true
+  launchctl_run kickstart -k "$service_target"
+  printf 'Keep-awake service started (%s mode).\n' "$mode"
+}
+
+stop_service() {
+  if service_is_loaded; then
+    launchctl_run bootout "$launch_domain" "$plist_path"
+  elif [[ "$DRY_RUN" == "1" ]]; then
+    launchctl_run bootout "$launch_domain" "$plist_path"
+  fi
+  printf 'Keep-awake service stopped (%s mode).\n' "$mode"
+}
+
+install_service() {
+  require_macos
+  require_system_privileges
+
+  if [[ "$mode" == "user" && -f "$SYSTEM_PLIST" ]]; then
+    die "A system installation already exists. Uninstall it before installing user mode."
+  fi
+  if [[ "$mode" == "system" && -f "$USER_PLIST" ]]; then
+    die "A user installation already exists. Uninstall it before installing system mode."
+  fi
+
+  local temp_plist
+  temp_plist="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/remote-mac-keepawake.XXXXXX")" || \
+    die "Could not create a temporary plist."
+  trap '/bin/rm -f "$temp_plist"' EXIT
+
+  if [[ "$mode" == "system" ]]; then
+    /bin/mkdir -p "$(/usr/bin/dirname "$plist_path")" "$SYSTEM_LOG_DIR"
+  else
+    /bin/mkdir -p "$(/usr/bin/dirname "$plist_path")" "$USER_LOG_DIR"
+  fi
+
+  render_plist "$temp_plist"
+  /usr/bin/plutil -lint "$temp_plist" >/dev/null || die "Generated launchd plist is invalid."
+  /usr/bin/install -m 0644 "$temp_plist" "$plist_path"
+
+  if [[ "$mode" == "system" && -z "$TEST_ROOT" ]]; then
+    /usr/sbin/chown root:wheel "$plist_path"
+  fi
+
+  load_service
+  /bin/rm -f "$temp_plist"
+  trap - EXIT
+  printf 'Installed and started %s in %s mode.\n' "$PROGRAM_NAME" "$mode"
+  printf 'The Mac now holds an idle-sleep prevention assertion while this service is loaded.\n'
+}
+
+uninstall_service() {
+  require_system_privileges
+  if service_is_loaded; then
+    launchctl_run bootout "$launch_domain" "$plist_path" || true
+  fi
+  if [[ -f "$plist_path" ]]; then
+    /bin/rm -f "$plist_path"
+  fi
+  printf 'Uninstalled %s from %s mode.\n' "$PROGRAM_NAME" "$mode"
+}
+
+status_service() {
+  local details=""
+  local state="not-loaded"
+  local pid=""
+  local assertion="false"
+  local installed="false"
+
+  [[ -f "$plist_path" ]] && installed="true"
+  details="$(/bin/launchctl print "$service_target" 2>/dev/null || true)"
+  if [[ -n "$details" ]]; then
+    state="$(printf '%s\n' "$details" | /usr/bin/awk '/^[[:space:]]*state = / { print $3; exit }')"
+    pid="$(printf '%s\n' "$details" | /usr/bin/awk '/^[[:space:]]*pid = / { print $3; exit }')"
+  fi
+
+  if [[ -n "$pid" ]] && /usr/bin/pmset -g assertions 2>/dev/null | \
+    /usr/bin/grep -Fq "pid $pid(caffeinate)"; then
+    assertion="true"
+  fi
+
+  if [[ "$json_output" == "1" ]]; then
+    printf '{"installed":%s,"mode":"%s","state":"%s","pid":%s,"idle_sleep_prevented":%s}\n' \
+      "$installed" "$mode" "$state" "${pid:-null}" "$assertion"
+  else
+    printf 'Installed:             %s\n' "$installed"
+    printf 'Mode:                  %s\n' "$mode"
+    printf 'Service state:         %s\n' "$state"
+    printf 'PID:                   %s\n' "${pid:-none}"
+    printf 'Idle sleep prevented:  %s\n' "$assertion"
+    printf 'Plist:                 %s\n' "$plist_path"
+  fi
+
+  [[ "$installed" == "true" && "$state" == "running" && "$assertion" == "true" ]]
+}
+
+doctor_service() {
+  printf 'Remote Mac KeepAwake doctor\n'
+  printf '===========================\n'
+  /usr/bin/sw_vers 2>/dev/null || true
+  printf '\nPower source:\n'
+  /usr/bin/pmset -g batt 2>/dev/null || true
+  printf '\nConfigured power settings:\n'
+  /usr/bin/pmset -g custom 2>/dev/null || true
+  printf '\nLid state (No means open):\n'
+  /usr/sbin/ioreg -r -k AppleClamshellState -d 4 2>/dev/null | \
+    /usr/bin/grep 'AppleClamshellState' || true
+  printf '\nKeep-awake service:\n'
+  status_service || true
+  printf '\nReminder: software cannot prevent power loss, network loss, a forced shutdown,\n'
+  printf 'or normal MacBook lid sleep. Keep the lid open and verify stable power.\n'
+}
+
+show_logs() {
+  printf 'stdout: %s\n' "$stdout_path"
+  [[ -f "$stdout_path" ]] && /usr/bin/tail -n 50 "$stdout_path"
+  printf 'stderr: %s\n' "$stderr_path"
+  [[ -f "$stderr_path" ]] && /usr/bin/tail -n 50 "$stderr_path"
+}
+
+case "$command_name" in
+  install)
+    install_service
+    ;;
+  uninstall)
+    uninstall_service
+    ;;
+  start)
+    require_system_privileges
+    start_service
+    ;;
+  stop)
+    require_system_privileges
+    stop_service
+    ;;
+  restart)
+    require_system_privileges
+    stop_service
+    start_service
+    ;;
+  status)
+    status_service
+    ;;
+  doctor)
+    doctor_service
+    ;;
+  logs)
+    show_logs
+    ;;
+  version)
+    printf '%s %s\n' "$PROGRAM_NAME" "$VERSION"
+    ;;
+  help)
+    usage
+    ;;
+  *)
+    usage >&2
+    die "Unknown command: $command_name"
+    ;;
+esac
