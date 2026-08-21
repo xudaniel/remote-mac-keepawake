@@ -2,6 +2,19 @@
 
 All notable changes follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- Mac Pulse, an optional bilingual remote monitoring dashboard with protected
+  heartbeat ingestion, 90-second offline detection, and bounded D1 history.
+- A privacy-preserving launchd heartbeat reporter that runs every 60 seconds
+  and never uploads machine identity.
+- Opt-in remote-Mac internet speed sampling with cached download, upload, idle
+  latency, responsiveness, exact measurement timestamps, retained history, and
+  CSV export. Apple `networkQuality` runs no more often than every 30 minutes
+  and defaults to every 6 hours to limit bandwidth impact.
+
 ## [1.2.0] - 2026-08-20
 
 ### Added

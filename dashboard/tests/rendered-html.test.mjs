@@ -43,10 +43,11 @@ test("checks separate view and ingest authorization before database access", asy
   assert.doesNotMatch(heartbeatRoute, /\.delete\(|\.offset\(288\)|lte\(/);
 });
 
-test("ships the D1 migration and no real secrets", async () => {
-  const [initialMigration, featureMigration, example, hosting] = await Promise.all([
+test("ships additive D1 migrations and no real secrets", async () => {
+  const [initialMigration, featureMigration, speedMigration, example, hosting] = await Promise.all([
     readFile(new URL("../drizzle/0000_lumpy_susan_delgado.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0001_late_stranger.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0002_ambitious_lightspeed.sql", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
@@ -55,6 +56,9 @@ test("ships the D1 migration and no real secrets", async () => {
   assert.match(featureMigration, /CREATE TABLE .*alert_events/);
   assert.match(featureMigration, /health_samples_received_at_idx/);
   assert.doesNotMatch(featureMigration, /DROP TABLE|DELETE FROM/i);
+  assert.match(speedMigration, /internet_download_mbps/);
+  assert.match(speedMigration, /internet_speed_measured_at/);
+  assert.doesNotMatch(speedMigration, /DROP TABLE|DELETE FROM/i);
   assert.match(example, /replace-with-a-long-random-secret/);
   assert.match(example, /ALERT_WEBHOOK_URL/);
   assert.match(hosting, /"d1": "DB"/);
@@ -73,6 +77,21 @@ test("battery history exposes local timestamps and selectable samples", async ()
   assert.match(dashboard, /dateTime=\{toIsoTimestamp/);
   assert.match(styles, /\.history-axis/);
   assert.match(styles, /\.history-detail/);
+});
+
+test("remote internet speed includes cached measurements and an exact timestamp", async () => {
+  const [dashboard, heartbeat, historyExport, health] = await Promise.all([
+    readFile(new URL("../app/Dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/heartbeat/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/history/export/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/health.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(dashboard, /Internet speed/);
+  assert.match(dashboard, /Last speed test — exact local time/);
+  assert.match(dashboard, /Download \/ upload/);
+  assert.match(heartbeat, /internetSpeedMeasuredAt/);
+  assert.match(historyExport, /internet_speed_measured_at/);
+  assert.match(health, /internet_speed_enabled \?\? false/);
 });
 
 test("implements paginated owner-only history lifecycle", async () => {

@@ -253,6 +253,10 @@ Failure outcome: the working user installation remains active.
 - The dashboard must expose checked, passed, failed, and unknown states for
   KeepAwake, power, network, and Chrome Remote Desktop, plus safe recovery
   guidance and a copyable secret-free summary.
+- Opt-in internet speed sampling must run on the monitored Mac, not in the
+  viewer's browser; expose download, upload, idle latency, responsiveness, and
+  an exact measurement timestamp. Cache the result between heartbeats, default
+  to a six-hour interval, and reject intervals below 30 minutes.
 - Optional alerts must deduplicate active states, record distinct recoveries,
   keep destinations out of heartbeat data and Git, and send only a minimal
   event payload.
@@ -304,6 +308,19 @@ Required fields:
 The schema must not include hostname, username, device serial number, IP
 address, webhook URL, or secrets.
 
+The optional Mac Pulse reporter appends these backward-compatible fields. An
+older reporter may omit them; an enabled reporter may use null measurements
+until the first successful test.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `internet_speed_enabled` | boolean | Explicit reporter opt-in state |
+| `internet_download_mbps` | number or null | Decimal megabits per second |
+| `internet_upload_mbps` | number or null | Decimal megabits per second |
+| `internet_latency_ms` | number or null | Idle round-trip latency |
+| `internet_responsiveness_rpm` | number or null | Round trips per minute; higher is better |
+| `internet_speed_measured_at` | string or null | UTC ISO-8601 time of the cached measurement |
+
 ## 10. Architecture
 
 ```text
@@ -319,6 +336,12 @@ Operator CLI
 launchd
     |
     +-- supervises /usr/bin/caffeinate -i
+
+Optional Mac Pulse reporter
+    |
+    +-- invokes /usr/bin/networkQuality at a bounded interval
+    +-- caches the last valid result in a mode-0600 file
+    +-- publishes the cached result with each authorized heartbeat
 ```
 
 The core CLI has no project-owned daemon binary, network server, database,
@@ -331,6 +354,9 @@ heartbeat store; the CLI remains fully usable without it.
 - Default operation must not make outbound network requests.
 - Network reachability, local notifications, and webhooks require explicit
   flags.
+- Internet speed testing must be opt-in, use the documented macOS tool, retain
+  the last valid cache after a transient failure, and never run more frequently
+  than every 30 minutes.
 - User mode must not require root.
 - System mode must validate exact ownership and modes.
 - Paths removed during uninstall must be fixed project-owned paths.

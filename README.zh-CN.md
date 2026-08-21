@@ -166,7 +166,8 @@ remote-mac-keepawake health --watch \
 
 `dashboard/` 提供适合手机查看的私密页面，实时显示心跳新鲜度、电量、充电与
 电源状态、合盖状态、launchd 服务、防睡眠 assertion、版本、远程连接诊断、
-提醒和包含本地准确时间的完整历史。
+提醒和包含本地准确时间的完整历史。可选的远程 Mac 测速还会显示下载、上传、
+空闲延迟、响应能力以及测速本身的准确时间。
 
 如果面板只运行在被监控的 Mac 上，电脑睡眠后页面也会一起消失。Mac Pulse 会在
 用户显式启用后，把最小化心跳保存到电脑之外；连续 90 秒没有心跳时，面板会把
@@ -181,7 +182,7 @@ read -rs MAC_PULSE_SITES_TOKEN
 printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
   ./bin/remote-mac-heartbeat install \
   --url https://your-private-dashboard.example/api/heartbeat \
-  --token-stdin --sites-token-stdin --user
+  --token-stdin --sites-token-stdin --user --internet-speed
 unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 ./bin/remote-mac-heartbeat status
 ```
@@ -190,10 +191,16 @@ unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 或密钥。生产站点使用仅限所有者的身份会话查看数据；上传密钥与私密站点自动
 访问令牌继续保持分离。
 
+`--internet-speed` 会在远程 Mac 上调用 Apple 内置的 `networkQuality`，并自动
+开启基础网络连通性检查。60 秒心跳会复用缓存结果；默认每 21,600 秒（6 小时）
+才重新测速，因为每次测速都会传输数据，也可能短暂占用远程控制带宽。可以使用
+`--speed-test-interval SECONDS` 设置 1,800 至 86,400 秒的间隔。两个测速参数都
+不提供时，测速完全关闭。
+
 已接收样本不会自动清理。所有者可以通过有范围限制、采用 cursor 分页的接口查看
 1 小时至全部历史或自定时间范围，检查本地准确时间与状态变化，导出 CSV，查看
 估算存储量和在线率，并通过显式确认流程删除历史。留存仍受托管商容量和项目
-生命周期限制。
+生命周期限制。测速结果及其准确时间使用同一套留存、导出和删除流程。
 
 可选远程提醒会对离线、电池、电源、KeepAwake、网络和 Chrome Remote Desktop
 状态变化去重，并记录恢复事件。服务端 webhook 目标绝不会进入心跳数据。可靠的

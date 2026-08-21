@@ -10,6 +10,8 @@ indicate that the Mac is asleep, offline, or powered down.
   next expected check-in;
 - verified idle-sleep assertion and launchd service state;
 - battery percentage, charging state, and power source;
+- opt-in internet download, upload, idle-latency, and responsiveness results
+  measured on the remote Mac, with an exact measurement timestamp;
 - explicit checked, passed, failed, and unknown diagnostics for KeepAwake,
   power, network, and Chrome Remote Desktop;
 - complete retained heartbeat history with 1-hour through all-time and custom
@@ -20,6 +22,12 @@ indicate that the Mac is asleep, offline, or powered down.
 
 The interface supports English and Simplified Chinese and refreshes every ten
 seconds. A heartbeat older than 90 seconds is considered offline.
+
+The reporter uses Apple's built-in `networkQuality` only when the operator
+enables it. Measurements are cached between heartbeats and default to a six-hour
+interval because the test transfers data and may briefly compete with remote
+control. The dashboard never tests the viewer's browser connection and presents
+old results with their actual timestamp and age.
 
 ## Access, privacy, and security
 
@@ -62,7 +70,8 @@ an unbounded browser response. CSV export is owner-only and returns at most
 50,000 rows per request; narrow the range if the response is marked truncated.
 The dashboard estimates storage at 256 bytes per sample and labels that value as
 an estimate. Deleting history requires typing `DELETE HISTORY` exactly and is
-irreversible.
+irreversible. Internet speed fields and timestamps use the same retention,
+pagination, export, and deletion lifecycle.
 
 ## Local development
 

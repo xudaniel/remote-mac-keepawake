@@ -225,6 +225,9 @@ Mac。
   仅限所有者的 CSV 导出与明确、不可撤销的删除确认；
 - 面板必须分别显示 KeepAwake、电源、网络和 Chrome Remote Desktop 的已检查、
   通过、失败和未知状态，提供安全恢复建议和可复制、不含密钥的摘要；
+- 可选互联网测速必须在被监控的 Mac 上执行，不能在查看者浏览器中执行；必须显示
+  下载、上传、空闲延迟、响应能力和准确测速时间。心跳之间复用缓存，默认间隔为
+  6 小时，并拒绝低于 30 分钟的间隔；
 - 可选提醒必须对持续异常去重，单独记录恢复事件，不得把通知目标写入心跳或 Git，
   并且只能发送最小化事件 payload；
 - 手机面板必须能在 320 CSS 像素下重排，提供清晰键盘焦点、可读双语标签、语义
@@ -271,6 +274,18 @@ Mac。
 
 Schema 不得包含主机名、用户名、设备序列号、IP 地址、webhook URL 或密钥。
 
+可选 Mac Pulse reporter 会追加以下向后兼容字段。旧 reporter 可以不提供；启用
+测速后，在第一次成功测速之前，测量值可以为 null。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `internet_speed_enabled` | boolean | reporter 是否显式启用测速 |
+| `internet_download_mbps` | number 或 null | 下载 Mbps |
+| `internet_upload_mbps` | number 或 null | 上传 Mbps |
+| `internet_latency_ms` | number 或 null | 空闲往返延迟 |
+| `internet_responsiveness_rpm` | number 或 null | 每分钟往返次数，越高越好 |
+| `internet_speed_measured_at` | string 或 null | 缓存测速结果的 UTC ISO-8601 时间 |
+
 ## 10. 架构
 
 ```text
@@ -286,6 +301,12 @@ Schema 不得包含主机名、用户名、设备序列号、IP 地址、webhook
 launchd
     |
     +-- 监督 /usr/bin/caffeinate -i
+
+可选 Mac Pulse reporter
+    |
+    +-- 按受限间隔调用 /usr/bin/networkQuality
+    +-- 把最后一次有效结果保存在权限为 0600 的缓存文件中
+    +-- 在每次已授权心跳中上传缓存结果
 ```
 
 核心 CLI 没有自有 daemon 二进制、网络服务器、数据库、特权 helper、浏览器扩展
@@ -296,6 +317,8 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 
 - 默认操作不得发送出站网络请求；
 - 网络连通性、本机通知和 webhook 都必须显式启用；
+- 互联网测速必须显式启用，只能使用文档指定的 macOS 工具；临时失败时保留最后
+  一次有效缓存，且测速间隔不得短于 30 分钟；
 - 用户模式不得要求 root；
 - 系统模式必须验证准确属主和权限；
 - 卸载只能删除固定的项目专属路径；

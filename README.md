@@ -171,7 +171,8 @@ hostname, username, PID, battery level, or secrets.
 The `dashboard/` app adds a private, mobile-friendly view of heartbeat
 freshness, battery level, charging and power state, lid state, launchd service,
 idle-sleep protection, version, remote-access diagnostics, alerts, and complete
-retained history with exact local timestamps.
+retained history with exact local timestamps. An optional remote-Mac speed test
+adds download, upload, idle latency, responsiveness, and its own exact timestamp.
 
 Unlike a dashboard running only on the Mac, Mac Pulse stores a minimal opt-in
 heartbeat outside the device. If no heartbeat arrives for 90 seconds, the
@@ -186,7 +187,7 @@ read -rs MAC_PULSE_SITES_TOKEN
 printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
   ./bin/remote-mac-heartbeat install \
   --url https://your-private-dashboard.example/api/heartbeat \
-  --token-stdin --sites-token-stdin --user
+  --token-stdin --sites-token-stdin --user --internet-speed
 unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 ./bin/remote-mac-heartbeat status
 ```
@@ -196,11 +197,20 @@ address, serial number, location, or credentials. The production site uses its
 owner-only identity session for viewing; its ingest key and private-site
 automation token remain separate.
 
+`--internet-speed` uses Apple's built-in `networkQuality` on the remote Mac and
+automatically enables the basic network reachability check. The 60-second
+heartbeat reuses a cached result; a new speed test runs every 21,600 seconds
+(6 hours) by default because each test transfers data and can briefly compete
+with remote-control traffic. Set a reviewed interval from 1,800 to 86,400
+seconds with `--speed-test-interval SECONDS`. Omit both flags to disable speed
+testing completely.
+
 Accepted samples are not automatically pruned. The owner can browse bounded,
 cursor-paginated 1-hour through all-time or custom ranges, inspect exact local
 timestamps and state changes, export CSV, see estimated storage and uptime, and
 use an explicit confirmed deletion workflow. Retention remains subject to the
-hosting provider's capacity and project lifecycle.
+hosting provider's capacity and project lifecycle. Speed measurements and their
+exact timestamps follow the same retention, export, and deletion lifecycle.
 
 Optional remote alerts deduplicate outage, battery, power, KeepAwake, network,
 and Chrome Remote Desktop transitions and record recoveries. A server-side

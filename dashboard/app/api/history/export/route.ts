@@ -20,7 +20,9 @@ export async function GET(request: Request) {
     const result = await d1.prepare(`
       SELECT received_at, reported_at, health, service_state, idle_sleep_prevented,
              power_source, battery_percent, charging, lid_closed, network_checked,
-             network_available, chrome_checked, chrome_running, version, mode
+             network_available, internet_speed_enabled, internet_download_mbps,
+             internet_upload_mbps, internet_latency_ms, internet_responsiveness_rpm,
+             internet_speed_measured_at, chrome_checked, chrome_running, version, mode
       FROM health_samples ${where.sql} ORDER BY id ASC LIMIT ?
     `).bind(...where.values, EXPORT_LIMIT + 1).all<Record<string, unknown>>();
     const rows = result.results ?? [];
@@ -29,7 +31,9 @@ export async function GET(request: Request) {
     const columns = [
       "received_at", "reported_at", "health", "service_state", "idle_sleep_prevented",
       "power_source", "battery_percent", "charging", "lid_closed", "network_checked",
-      "network_available", "chrome_checked", "chrome_running", "version", "mode",
+      "network_available", "internet_speed_enabled", "internet_download_mbps",
+      "internet_upload_mbps", "internet_latency_ms", "internet_responsiveness_rpm",
+      "internet_speed_measured_at", "chrome_checked", "chrome_running", "version", "mode",
     ];
     const output = [columns.join(","), ...exported.map((row) => columns.map((column) => csv(row[column])).join(","))].join("\n");
     return new Response(output, {
@@ -44,4 +48,3 @@ export async function GET(request: Request) {
     return Response.json({ error: "History export failed" }, { status: 503 });
   }
 }
-

@@ -40,6 +40,12 @@ export async function POST(request: Request) {
       lidClosed: item.lid_closed,
       networkChecked: item.network_checked === 1,
       networkAvailable: item.network_available,
+      internetSpeedEnabled: item.internet_speed_enabled,
+      internetDownloadMbps: item.internet_download_mbps,
+      internetUploadMbps: item.internet_upload_mbps,
+      internetLatencyMs: item.internet_latency_ms,
+      internetResponsivenessRpm: item.internet_responsiveness_rpm,
+      internetSpeedMeasuredAt: item.internet_speed_measured_at,
       chromeChecked: item.chrome_checked === 1,
       chromeRunning: item.chrome_running,
     });

@@ -19,6 +19,12 @@ type RawSample = {
   lid_closed: number | null;
   network_checked: number;
   network_available: number | null;
+  internet_speed_enabled: number;
+  internet_download_mbps: number | null;
+  internet_upload_mbps: number | null;
+  internet_latency_ms: number | null;
+  internet_responsiveness_rpm: number | null;
+  internet_speed_measured_at: string | null;
   chrome_checked: number;
   chrome_running: number | null;
 };
@@ -54,6 +60,12 @@ function mapSample(row: RawSample) {
     lidClosed: nullableBoolean(row.lid_closed),
     networkChecked: Boolean(row.network_checked),
     networkAvailable: nullableBoolean(row.network_available),
+    internetSpeedEnabled: Boolean(row.internet_speed_enabled),
+    internetDownloadMbps: row.internet_download_mbps,
+    internetUploadMbps: row.internet_upload_mbps,
+    internetLatencyMs: row.internet_latency_ms,
+    internetResponsivenessRpm: row.internet_responsiveness_rpm,
+    internetSpeedMeasuredAt: row.internet_speed_measured_at,
     chromeChecked: Boolean(row.chrome_checked),
     chromeRunning: nullableBoolean(row.chrome_running),
   };
@@ -151,4 +163,3 @@ export async function DELETE(request: Request) {
     return Response.json({ error: "History deletion failed" }, { status: 503 });
   }
 }
-
