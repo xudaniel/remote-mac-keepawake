@@ -36,7 +36,7 @@ type StatusResponse = {
   age_seconds: number | null;
   online: boolean;
   awake: boolean;
-  overall: "healthy" | "offline" | "unprotected";
+  overall: "healthy" | "stale" | "offline" | "unprotected";
   latest: Sample | null;
 };
 
@@ -277,7 +277,8 @@ export default function Dashboard() {
   const latest = status?.latest ?? null;
   const online = Boolean(status && currentAge !== null && currentAge <= status.offline_after_seconds);
   const awake = Boolean(online && latest?.serviceState === "running" && latest.idleSleepPrevented);
-  const overall = !online ? "offline" : awake ? "healthy" : "unprotected";
+  const stale = Boolean(online && awake && currentAge !== null && currentAge > (status?.expected_check_in_seconds ?? 60) + 15);
+  const overall = !online ? "offline" : !awake ? "unprotected" : stale ? "stale" : "healthy";
   const battery = latest?.batteryPercent;
   const selectedSample = history.find((sample) => sample.id === selectedSampleId) ?? history.at(-1) ?? null;
   const displayedHistory = history.length <= 120 ? history : history.filter((_, index) => index % Math.ceil(history.length / 120) === 0 || index === history.length - 1);
@@ -341,6 +342,10 @@ export default function Dashboard() {
     }
     return events.slice(-12).reverse();
   }, [history, language, tx]);
+  const latestTransition = historyEvents[0] ?? null;
+  const currentStateStartedAt = latestTransition?.time ?? history[0]?.receivedAt ?? latest?.receivedAt ?? null;
+  const currentStateSeconds = currentStateStartedAt ? Math.max(0, Math.floor((clock - parseUtcTimestamp(currentStateStartedAt).getTime()) / 1_000)) : null;
+  const lastSuccessfulDelivery = alerts?.events.find((event) => Boolean(event.delivered)) ?? null;
 
   async function unlock(event: FormEvent) {
     event.preventDefault();
@@ -471,8 +476,8 @@ export default function Dashboard() {
     );
   }
 
-  const title = overall === "healthy" ? tx("Mac is awake and protected", "电脑清醒且防睡眠正常") : overall === "offline" ? tx("Mac is not checking in", "电脑已停止报到") : tx("Mac is online but unprotected", "电脑在线但防睡眠未生效");
-  const statusLabel = overall === "healthy" ? tx("Healthy", "正常") : overall === "offline" ? tx("Offline", "离线") : tx("Attention", "需注意");
+  const title = overall === "healthy" ? tx("Mac is awake and protected", "电脑清醒且防睡眠正常") : overall === "stale" ? tx("Heartbeat is late", "心跳已经延迟") : overall === "offline" ? tx("Mac is not checking in", "电脑已停止报到") : tx("Mac is online but unprotected", "电脑在线但防睡眠未生效");
+  const statusLabel = overall === "healthy" ? tx("Healthy", "正常") : overall === "stale" ? tx("Stale", "延迟") : overall === "offline" ? tx("Offline", "离线") : tx("Attention", "需注意");
 
   return (
     <main className={`dashboard-shell state-${overall}`}>
@@ -500,6 +505,7 @@ export default function Dashboard() {
         <div className="section-heading"><div><span>{tx("Evidence-based checks", "基于数据的检查")}</span><h2 id="diagnostics-title">{tx("Remote access diagnostics", "远程连接诊断")}</h2></div><button className="secondary-button" type="button" onClick={() => void copyDiagnostics()}>{tx("Copy safe diagnostics", "复制安全诊断")}</button></div>
         <div className="diagnostic-grid">{diagnosticRows.map((row) => <article key={row.label}><div><span className={`diagnostic-icon ${!row.checked ? "unknown" : row.passed ? "passed" : "failed"}`} aria-hidden="true">{!row.checked ? "?" : row.passed ? "✓" : "!"}</span><strong>{row.label}</strong></div><p>{!row.checked ? tx("Not checked", "未检查") : row.passed ? tx("Passed", "通过") : tx("Needs attention", "需处理")}</p><small>{row.detail}</small></article>)}</div>
         <p className="evidence-note">{tx("A failed or missing check narrows the possibilities; it does not prove a single root cause and cannot remotely wake a sleeping or powered-off Mac.", "失败或缺失的检查只能缩小可能范围，不能证明唯一原因，也无法远程唤醒已睡眠或关机的 Mac。")}</p>
+        <p className="transition-note"><strong>{tx("Last detected transition", "最后检测到的变化")}:</strong> {latestTransition ? `${latestTransition.text} · ${formatTime(latestTransition.time, language)}` : tx("None in the loaded range", "已载入范围内没有变化")}<br /><span>{tx("Current observed state duration", "当前观测状态持续时间")}: {currentStateSeconds === null ? "—" : formatDuration(currentStateSeconds, language)}</span></p>
       </section>
 
       <section className="history-card" aria-labelledby="history-title">
@@ -517,7 +523,7 @@ export default function Dashboard() {
       </section>
 
       <section className="alerts-card" aria-labelledby="alerts-title">
-        <div className="section-heading"><div><span>{tx("Optional outbound notification", "可选外部通知")}</span><h2 id="alerts-title">{tx("Alert center", "提醒中心")}</h2></div><span className={`config-pill ${alerts?.webhook_configured ? "configured" : ""}`}>{alerts?.webhook_configured ? tx("Webhook configured", "Webhook 已配置") : tx("Webhook not configured", "Webhook 未配置")}</span></div>
+        <div className="section-heading"><div><span>{tx("Optional outbound notification", "可选外部通知")}</span><h2 id="alerts-title">{tx("Alert center", "提醒中心")}</h2></div><div className="alert-delivery-summary"><span className={`config-pill ${alerts?.webhook_configured ? "configured" : ""}`}>{alerts?.webhook_configured ? tx("Webhook configured", "Webhook 已配置") : tx("Webhook not configured", "Webhook 未配置")}</span><small>{tx("Last successful delivery", "上次成功发送")}: {lastSuccessfulDelivery ? formatTime(lastSuccessfulDelivery.created_at, language) : tx("None yet", "尚无")}</small></div></div>
         {alerts ? <><div className="alert-settings"><label className="switch-row"><input type="checkbox" checked={alerts.settings.enabled} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, enabled: event.target.checked } })} /><span><strong>{tx("Enable alerts", "开启提醒")}</strong><small>{tx("Events are recorded and a minimal webhook is attempted.", "记录事件，并尝试发送最小化 webhook。")}</small></span></label><label>{tx("Offline after (seconds)", "离线阈值（秒）")}<input type="number" min="90" max="3600" value={alerts.settings.offline_after_seconds} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, offline_after_seconds: Number(event.target.value) } })} /></label><label>{tx("Low battery at (%)", "低电量阈值（%）")}<input type="number" min="5" max="90" value={alerts.settings.battery_threshold} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, battery_threshold: Number(event.target.value) } })} /></label></div><div className="toggle-grid">{(["alert_keepawake", "alert_power", "alert_network", "alert_chrome"] as const).map((key) => { const label = key === "alert_keepawake" ? "KeepAwake" : key === "alert_power" ? tx("Power", "电源") : key === "alert_network" ? tx("Network", "网络") : "Chrome Remote Desktop"; return <div key={key}><input id={`toggle-${key}`} type="checkbox" checked={alerts.settings[key]} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, [key]: event.target.checked } })} /><label htmlFor={`toggle-${key}`}>{label}</label></div>; })}</div><div className="section-actions"><button className="primary-button" type="button" disabled={alertsSaving} onClick={() => void saveAlerts()}>{alertsSaving ? tx("Saving…", "保存中…") : tx("Save alert settings", "保存提醒设置")}</button><button className="secondary-button" type="button" onClick={() => void testAlert()}>{tx("Send test", "发送测试")}</button></div><p className="evidence-note">{tx("The webhook contains only product, alert kind/state/severity, and time—never device identity, battery details, PID, or secrets. Offline alerts require an external scheduler to call the protected check endpoint because an offline Mac cannot report itself.", "Webhook 只包含产品名、提醒类型/状态/级别与时间，绝不包含设备身份、电量细节、PID 或密钥。离线提醒需要外部定时器调用受保护的检查端点，因为离线 Mac 无法自行上报。")}</p><div className="alert-events"><h3>{tx("Recent alert events", "最近提醒事件")}</h3>{alerts.events.length ? alerts.events.map((event) => <div key={event.id}><span className={`event-state ${event.state}`}>{event.state}</span><strong>{event.message}</strong><time dateTime={toIsoTimestamp(event.created_at)}>{formatTime(event.created_at, language)}</time><small>{event.delivered ? tx("Delivered", "已发送") : event.delivery_error ?? tx("Not delivered", "未发送")}</small></div>) : <p>{tx("No alert transitions recorded yet.", "尚未记录提醒状态变化。")}</p>}</div></> : <p>{tx("Loading alert settings…", "正在载入提醒设置…")}</p>}
       </section>
 

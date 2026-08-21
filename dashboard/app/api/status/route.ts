@@ -4,6 +4,8 @@ import { healthSamples } from "../../../db/schema";
 import { unauthorized, viewerAuthMode } from "../../../lib/auth";
 
 const OFFLINE_AFTER_SECONDS = 90;
+const EXPECTED_CHECK_IN_SECONDS = 60;
+const STALE_AFTER_SECONDS = 75;
 
 export async function GET(request: Request) {
   const viewerAuth = viewerAuthMode(request);
@@ -22,14 +24,14 @@ export async function GET(request: Request) {
   const ageSeconds = latest ? Math.max(0, Math.floor((now - received) / 1000)) : null;
   const online = ageSeconds !== null && ageSeconds <= OFFLINE_AFTER_SECONDS;
   const awake = Boolean(online && latest?.serviceState === "running" && latest.idleSleepPrevented);
-  const overall = !online ? "offline" : awake ? "healthy" : "unprotected";
+  const overall = !online ? "offline" : !awake ? "unprotected" : ageSeconds !== null && ageSeconds > STALE_AFTER_SECONDS ? "stale" : "healthy";
 
     return Response.json(
       {
         server_time: new Date(now).toISOString(),
         viewer_auth: viewerAuth,
         offline_after_seconds: OFFLINE_AFTER_SECONDS,
-        expected_check_in_seconds: 60,
+        expected_check_in_seconds: EXPECTED_CHECK_IN_SECONDS,
         age_seconds: ageSeconds,
         online,
         awake,

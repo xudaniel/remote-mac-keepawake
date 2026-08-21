@@ -156,7 +156,7 @@ async function applyCondition(condition: AlertCondition) {
 export async function processHeartbeatAlerts(item: IncomingHealth) {
   const settings = await getAlertSettings();
   if (!settings.enabled) return;
-  const powerOnBattery = /battery/i.test(item.power_source) && item.charging !== true;
+  const powerOnBattery = /battery/i.test(item.power_source) && item.charging !== true && (item.battery_percent === null || item.battery_percent < 100);
   const conditions: AlertCondition[] = [
     {
       kind: "offline",
@@ -226,4 +226,3 @@ export async function sendTestAlert() {
   const createdAt = new Date().toISOString();
   return deliver("test", "test", "warning", createdAt);
 }
-

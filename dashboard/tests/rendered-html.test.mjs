@@ -108,13 +108,34 @@ test("dashboard includes actionable diagnostics and accessibility safeguards", a
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(dashboard, /Next expected check-in/);
+  assert.match(dashboard, /Heartbeat is late/);
   assert.match(dashboard, /Copy safe diagnostics/);
+  assert.match(dashboard, /Last successful delivery/);
+  assert.match(dashboard, /Current observed state duration/);
   assert.match(dashboard, /aria-live="polite"/);
   assert.match(dashboard, /Not checked/);
   assert.match(styles, /min-width: 320px/);
   assert.match(styles, /min-height: 44px/);
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /prefers-reduced-motion/);
+});
+
+test("core dashboard colors meet WCAG AA normal-text contrast", () => {
+  const channel = (value) => {
+    const normalized = value / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (hex) => {
+    const value = Number.parseInt(hex.slice(1), 16);
+    return 0.2126 * channel((value >> 16) & 255) + 0.7152 * channel((value >> 8) & 255) + 0.0722 * channel(value & 255);
+  };
+  const contrast = (first, second) => {
+    const values = [luminance(first), luminance(second)].sort((left, right) => right - left);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  };
+  for (const foreground of ["#f1faf6", "#a9bdb6", "#70eabb", "#ffc27f", "#ff9e87"]) {
+    assert.ok(contrast(foreground, "#07100f") >= 4.5, `${foreground} must meet 4.5:1 on the page background`);
+  }
 });
 
 test("documents unbounded application-level heartbeat retention", async () => {
