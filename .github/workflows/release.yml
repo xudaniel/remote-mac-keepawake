@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*.*.*'
 
 permissions:
   contents: write
@@ -25,16 +25,18 @@ jobs:
           declared="$(awk -F'"' '/readonly VERSION=/{print $2; exit}' bin/remote-mac-keepawake)"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$declared" == "$version" ]]
-          bash -n bin/remote-mac-keepawake tests/test.sh
+          bash -n bin/remote-mac-keepawake tests/test.sh tests/docs-test.sh
           ./tests/test.sh
+          ./tests/docs-test.sh
           test -x bin/remote-mac-keepawake
       - name: Build mode-preserving release archive and checksum
         shell: bash
         run: |
           package="remote-mac-keepawake-$GITHUB_REF_NAME"
-          mkdir -p "dist/$package/bin"
+          mkdir -p "dist/$package/bin" "dist/$package/docs"
           install -m 0755 bin/remote-mac-keepawake "dist/$package/bin/"
-          install -m 0644 README.md CHANGELOG.md SECURITY.md LICENSE "dist/$package/"
+          install -m 0644 README.md README.zh-CN.md CHANGELOG.md SECURITY.md LICENSE "dist/$package/"
+          install -m 0644 docs/PRD.en.md docs/PRD.zh-CN.md "dist/$package/docs/"
           tar -czf "dist/$package.tar.gz" -C dist "$package"
           cd dist
           shasum -a 256 "$package.tar.gz" > SHA256SUMS

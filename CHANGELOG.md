@@ -2,6 +2,24 @@
 
 All notable changes follow semantic versioning.
 
+## [1.2.0] - 2026-08-20
+
+### Added
+
+- A standalone English product requirements document at `docs/PRD.en.md`.
+- A complete Simplified Chinese product requirements document at
+  `docs/PRD.zh-CN.md`.
+- A dedicated Chinese README at `README.zh-CN.md` with parity links between
+  both languages.
+- Automated documentation checks that keep the CLI version, changelog,
+  bilingual README files, PRDs, and release archive aligned.
+
+### Changed
+
+- Reorganized the English README around installation, operational safety,
+  health monitoring, recovery, and release verification.
+- Release archives now include both README files and both PRDs.
+
 ## [1.1.0] - 2026-08-20
 
 ### Added
