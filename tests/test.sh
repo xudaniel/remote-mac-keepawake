@@ -70,7 +70,7 @@ system_cli="$TEST_AREA/usr/local/bin/remote-mac-keepawake"
 
 printf '1. Syntax, version, and help contract\n'
 /bin/bash -n "$CLI" || fail "CLI has invalid shell syntax"
-assert_eq "$(/bin/bash "$CLI" version)" "remote-mac-keepawake 1.2.0"
+assert_eq "$(/bin/bash "$CLI" version)" "remote-mac-keepawake 1.3.0"
 help_output="$(/bin/bash "$CLI" help)"
 assert_contains_text "$help_output" "Health exit codes"
 assert_contains_text "$help_output" "migrate --system --yes"
@@ -170,6 +170,21 @@ malformed_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
   fail "Malformed sensor output should be normalized"
 assert_json "$malformed_output"
 assert_contains_text "$malformed_output" '"lid_closed":null'
+low_battery_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_PERCENT=19 RMKA_TEST_CHARGING=false \
+  /bin/bash "$CLI" health --system --json)"
+low_battery_rc=$?
+assert_eq "$low_battery_rc" "2"
+assert_contains_text "$low_battery_output" '"battery_percent":19'
+assert_contains_text "$low_battery_output" '"charging":false'
+assert_contains_text "$low_battery_output" '"health":"degraded"'
+invalid_battery_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_PERCENT=invalid RMKA_TEST_CHARGING=invalid \
+  /bin/bash "$CLI" health --system --json)" ||
+  fail "Malformed battery output should be normalized"
+assert_json "$invalid_battery_output"
+assert_contains_text "$invalid_battery_output" '"battery_percent":null'
+assert_contains_text "$invalid_battery_output" '"charging":null'
 unavailable_output="$(run_cli_fail_step assertion health --system --json)"
 unavailable_rc=$?
 assert_eq "$unavailable_rc" "1"
@@ -196,7 +211,7 @@ if run_cli_fail_step upgrade_copy upgrade --system --from "$CLI" >/dev/null 2>&1
 fi
 assert_eq "$(/usr/bin/shasum -a 256 "$system_cli" | /usr/bin/awk '{print $1}')" "$cli_hash"
 run_cli upgrade --system --from "$CLI" >/dev/null || fail "Verified upgrade failed"
-assert_eq "$("$system_cli" version)" "remote-mac-keepawake 1.2.0"
+assert_eq "$("$system_cli" version)" "remote-mac-keepawake 1.3.0"
 
 printf '10. Clean uninstall preserves explicit mode isolation\n'
 run_cli uninstall --system >/dev/null || fail "System uninstall failed"

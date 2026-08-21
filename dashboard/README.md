@@ -10,6 +10,8 @@ indicate that the Mac is asleep, offline, or powered down.
   next expected check-in;
 - verified idle-sleep assertion and launchd service state;
 - battery percentage, charging state, and power source;
+- opt-in internet download, upload, idle-latency, and responsiveness results
+  measured on the remote Mac, with an exact measurement timestamp;
 - explicit checked, passed, failed, and unknown diagnostics for KeepAwake,
   power, network, and Chrome Remote Desktop;
 - complete retained heartbeat history with 1-hour through all-time and custom
@@ -20,6 +22,12 @@ indicate that the Mac is asleep, offline, or powered down.
 
 The interface supports English and Simplified Chinese and refreshes every ten
 seconds. A heartbeat older than 90 seconds is considered offline.
+
+The reporter uses Apple's built-in `networkQuality` only when the operator
+enables it. Measurements are cached between heartbeats and default to a six-hour
+interval because the test transfers data and may briefly compete with remote
+control. The dashboard never tests the viewer's browser connection and presents
+old results with their actual timestamp and age.
 
 ## Access, privacy, and security
 
@@ -35,6 +43,14 @@ accepted heartbeat samples; they remain in the site's D1 database until the
 owner removes the data or the site. Storage is still subject to the hosting
 provider's capacity and lifecycle limits. The reporter is opt-in and stores
 its ingest token in a mode-`0600` local file.
+
+The reporter also writes every sample atomically to a private local outbox
+before upload. Failed samples are retried and replayed after recovery, while a
+random sample ID makes server ingestion idempotent. Replayed samples retain
+their original observation timestamp, and stale replay never triggers a fresh
+alert. `remote-mac-heartbeat status` exposes the queue depth and last successful
+delivery. Uninstall preserves queued samples but removes their credentials.
+
 For an owner-only Sites deployment, its separate automation bypass token is
 also stored in a mode-`0600` file and sent only in the Sites authorization
 header.
@@ -62,18 +78,25 @@ an unbounded browser response. CSV export is owner-only and returns at most
 50,000 rows per request; narrow the range if the response is marked truncated.
 The dashboard estimates storage at 256 bytes per sample and labels that value as
 an estimate. Deleting history requires typing `DELETE HISTORY` exactly and is
-irreversible.
+irreversible. Internet speed fields and timestamps use the same retention,
+pagination, export, and deletion lifecycle.
 
 ## Local development
 
 Copy `.env.example` to `.env.local`, choose two different secrets, optionally
-set an alert webhook, generate the D1 migration after schema changes, and run:
+set an alert webhook, and run:
 
 ```bash
 npm ci
 npm run dev
 npm test
 ```
+
+Database changes use reviewed, sequential SQL files in `drizzle/`. Add the next
+numbered migration, update `db/schema.ts`, and extend the migration test. The
+repository intentionally does not install a schema-generator CLI, keeping the
+development dependency surface smaller while the migration test protects old
+history.
 
 For the bundled local preview defaults only, use `local-view-token` and
 `local-ingest-token`. Production refuses to use these defaults.

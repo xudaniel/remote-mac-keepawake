@@ -16,7 +16,7 @@ const RANGE_MILLISECONDS: Partial<Record<HistoryRange, number>> = {
 };
 
 function toSqlTimestamp(value: Date) {
-  return value.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+  return value.toISOString();
 }
 
 function validDate(value: string | null) {
@@ -49,11 +49,11 @@ export function historyWhere(bounds: HistoryBounds, cursor?: number | null) {
   const clauses: string[] = [];
   const values: Array<string | number> = [];
   if (bounds.from) {
-    clauses.push("received_at >= ?");
+    clauses.push("reported_at >= ?");
     values.push(bounds.from);
   }
   if (bounds.to) {
-    clauses.push("received_at <= ?");
+    clauses.push("reported_at <= ?");
     values.push(bounds.to);
   }
   if (cursor) {
@@ -78,4 +78,3 @@ export function parseCursor(value: string | null) {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : Number.NaN;
 }
-

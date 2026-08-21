@@ -1,11 +1,19 @@
 # Remote Mac KeepAwake
 
 [![CI](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml/badge.svg)](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/xudaniel/remote-mac-keepawake)](https://github.com/xudaniel/remote-mac-keepawake/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-70eabb.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-14%20%7C%2015%20%7C%2026-f1faf6.svg)](#支持系统与-ci)
 
 [English](README.md) | [简体中文](README.zh-CN.md)  
 [英文 PRD](docs/PRD.en.md) | [中文 PRD](docs/PRD.zh-CN.md)
 
-当前版本：v1.2.0
+当前版本：v1.3.0
+
+![Mac Pulse 合成数据面板预览](docs/assets/mac-pulse-synthetic.svg)
+
+预览图只使用合成数据。架构与信任边界见
+[架构说明](docs/ARCHITECTURE.zh-CN.md)。
 
 Remote Mac KeepAwake 使用 macOS 自带的 `caffeinate -i`，并交给
 `launchd` 持续管理。它可以防止电脑因为闲置而进入系统睡眠，在进程退出后
@@ -166,7 +174,8 @@ remote-mac-keepawake health --watch \
 
 `dashboard/` 提供适合手机查看的私密页面，实时显示心跳新鲜度、电量、充电与
 电源状态、合盖状态、launchd 服务、防睡眠 assertion、版本、远程连接诊断、
-提醒和包含本地准确时间的完整历史。
+提醒和包含本地准确时间的完整历史。可选的远程 Mac 测速还会显示下载、上传、
+空闲延迟、响应能力以及测速本身的准确时间。
 
 如果面板只运行在被监控的 Mac 上，电脑睡眠后页面也会一起消失。Mac Pulse 会在
 用户显式启用后，把最小化心跳保存到电脑之外；连续 90 秒没有心跳时，面板会把
@@ -181,7 +190,7 @@ read -rs MAC_PULSE_SITES_TOKEN
 printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
   ./bin/remote-mac-heartbeat install \
   --url https://your-private-dashboard.example/api/heartbeat \
-  --token-stdin --sites-token-stdin --user
+  --token-stdin --sites-token-stdin --user --internet-speed
 unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 ./bin/remote-mac-heartbeat status
 ```
@@ -190,10 +199,24 @@ unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 或密钥。生产站点使用仅限所有者的身份会话查看数据；上传密钥与私密站点自动
 访问令牌继续保持分离。
 
+每次上传前，上报组件都会先把样本原子写入权限为 `0700` 的私密本地 outbox。
+短暂故障会触发有限次数重试；仍未成功的样本会留在磁盘，网络恢复后按电脑实际
+观测时间自动补传。每个样本都有随机幂等 ID，所以结果不明确的重试不会生成重复
+历史。`status` 会显示 `pending_samples` 和 `last_success_at`。卸载时会删除密钥，
+但保留未发送样本以便重新安装后续传；因此长时间断网会持续占用本地磁盘，直到
+补传完成。
+
+`--internet-speed` 会在远程 Mac 上调用 Apple 内置的 `networkQuality`，并自动
+开启基础网络连通性检查。60 秒心跳会复用缓存结果；默认每 21,600 秒（6 小时）
+才重新测速，因为每次测速都会传输数据，也可能短暂占用远程控制带宽。可以使用
+`--speed-test-interval SECONDS` 设置 1,800 至 86,400 秒的间隔。两个测速参数都
+不提供时，测速完全关闭。
+
 已接收样本不会自动清理。所有者可以通过有范围限制、采用 cursor 分页的接口查看
 1 小时至全部历史或自定时间范围，检查本地准确时间与状态变化，导出 CSV，查看
 估算存储量和在线率，并通过显式确认流程删除历史。留存仍受托管商容量和项目
-生命周期限制。
+生命周期限制。测速结果及其准确时间使用同一套留存、导出和删除流程。
+补传样本保留电脑实际观测时间，而不是稍后被网络接收的时间。
 
 可选远程提醒会对离线、电池、电源、KeepAwake、网络和 Chrome Remote Desktop
 状态变化去重，并记录恢复事件。服务端 webhook 目标绝不会进入心跳数据。可靠的
@@ -263,17 +286,21 @@ sudo remote-mac-keepawake uninstall --system
 - 自动生成的 GitHub release notes；
 - GitHub 源码压缩包；
 - 保留可执行权限的项目归档；
-- `SHA256SUMS`。
+- SPDX 软件物料清单；
+- `SHA256SUMS` 和 GitHub artifact provenance attestations。
 
-校验 v1.2.0 下载文件：
+校验 v1.3.0 下载文件：
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-tar -tzf remote-mac-keepawake-v1.2.0.tar.gz
+tar -tzf remote-mac-keepawake-v1.3.0.tar.gz
+gh attestation verify remote-mac-keepawake-v1.3.0.tar.gz \
+  --repo xudaniel/remote-mac-keepawake
 ```
 
-项目归档包括本中文 README、[英文 README](README.md)、
-[英文 PRD](docs/PRD.en.md) 和 [中文 PRD](docs/PRD.zh-CN.md)。
+项目归档包括两个 CLI、Mac Pulse Dashboard 源码与 migrations、本中文 README、
+[英文 README](README.md)、[英文 PRD](docs/PRD.en.md) 和
+[中文 PRD](docs/PRD.zh-CN.md)。
 
 ## 支持系统与 CI
 
@@ -287,6 +314,8 @@ CI 检查：
 - 回滚和清理边界；
 - JSON 与 plist 有效性；
 - 可执行权限；
+- Heartbeat reporter 安装、上报、测速缓存和清理；
+- Dashboard lint、构建、路由行为和增量 D1 migrations；
 - 中英文文档与 release 元数据一致性；
 - 真实 LaunchAgent 重启以及恢复后的 `pmset` assertion。
 
@@ -302,6 +331,8 @@ CI 检查：
 ```bash
 ./tests/test.sh
 ./tests/docs-test.sh
+./tests/heartbeat-test.sh
+(cd dashboard && npm ci && npm run lint && npm test)
 ./.github/tests/launchd-integration.sh
 ```
 

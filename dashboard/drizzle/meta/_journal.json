@@ -15,6 +15,20 @@
       "when": 1787303182553,
       "tag": "0001_late_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787304725169,
+      "tag": "0002_ambitious_lightspeed",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787337259768,
+      "tag": "0003_lush_grim_reaper",
+      "breakpoints": true
     }
   ]
 }

@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 产品版本 | 1.2.0 |
+| 产品版本 | 1.3.0 |
 | 文档状态 | Release 基线 |
 | 负责人 | Daniel Xu |
-| 最后更新 | 2026-08-20 |
+| 最后更新 | 2026-08-21 |
 | 支持平台 | macOS 14、15、26 |
 | 许可证 | MIT |
 
@@ -20,9 +20,9 @@ Remote Mac KeepAwake 是一款本地优先的命令行工具。它把 macOS 自�
 产品把“假成功”视为严重可靠性缺陷：任何会改变状态的命令，只有在服务状态、
 受管 PID 和有效的闲置防睡眠 assertion 全部验证成功后，才可以显示成功。
 
-v1.2.0 建立完整的英文和简体中文产品及操作文档基线。它不会扩展 Mac 的物理
-能力；电源、网络、合盖、硬件、操作系统故障和 FileVault 启动前解锁均不属于
-产品能够控制的范围。
+v1.3.0 新增可选的 Mac Pulse 远程面板、包含准确时间戳的完整历史、隐私保护
+提醒和显式启用的网速测量。它不会扩展 Mac 的物理能力；电源、网络、合盖、
+硬件、操作系统故障和 FileVault 启动前解锁均不属于产品能够控制的范围。
 
 ## 2. 问题定义
 
@@ -223,8 +223,14 @@ Mac。
   充电、电源和主要风险，不得把推测写成确定原因；
 - 已接收心跳不得自动清理。历史接口必须采用有界时间范围和 cursor 分页，并提供
   仅限所有者的 CSV 导出与明确、不可撤销的删除确认；
+- 上报组件必须在上传前原子保存每个样本，把失败样本留在私密本地 outbox，恢复后
+  分批补传，显示待传数量和最后成功时间，并使用随机幂等 ID。补传必须保留实际
+  观测时间、避免重复入库，也不得触发过期的历史提醒；
 - 面板必须分别显示 KeepAwake、电源、网络和 Chrome Remote Desktop 的已检查、
   通过、失败和未知状态，提供安全恢复建议和可复制、不含密钥的摘要；
+- 可选互联网测速必须在被监控的 Mac 上执行，不能在查看者浏览器中执行；必须显示
+  下载、上传、空闲延迟、响应能力和准确测速时间。心跳之间复用缓存，默认间隔为
+  6 小时，并拒绝低于 30 分钟的间隔；
 - 可选提醒必须对持续异常去重，单独记录恢复事件，不得把通知目标写入心跳或 Git，
   并且只能发送最小化事件 payload；
 - 手机面板必须能在 320 CSS 像素下重排，提供清晰键盘焦点、可读双语标签、语义
@@ -271,6 +277,18 @@ Mac。
 
 Schema 不得包含主机名、用户名、设备序列号、IP 地址、webhook URL 或密钥。
 
+可选 Mac Pulse reporter 会追加以下向后兼容字段。旧 reporter 可以不提供；启用
+测速后，在第一次成功测速之前，测量值可以为 null。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `internet_speed_enabled` | boolean | reporter 是否显式启用测速 |
+| `internet_download_mbps` | number 或 null | 下载 Mbps |
+| `internet_upload_mbps` | number 或 null | 上传 Mbps |
+| `internet_latency_ms` | number 或 null | 空闲往返延迟 |
+| `internet_responsiveness_rpm` | number 或 null | 每分钟往返次数，越高越好 |
+| `internet_speed_measured_at` | string 或 null | 缓存测速结果的 UTC ISO-8601 时间 |
+
 ## 10. 架构
 
 ```text
@@ -286,6 +304,12 @@ Schema 不得包含主机名、用户名、设备序列号、IP 地址、webhook
 launchd
     |
     +-- 监督 /usr/bin/caffeinate -i
+
+可选 Mac Pulse reporter
+    |
+    +-- 按受限间隔调用 /usr/bin/networkQuality
+    +-- 把最后一次有效结果保存在权限为 0600 的缓存文件中
+    +-- 在每次已授权心跳中上传缓存结果
 ```
 
 核心 CLI 没有自有 daemon 二进制、网络服务器、数据库、特权 helper、浏览器扩展
@@ -296,6 +320,8 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 
 - 默认操作不得发送出站网络请求；
 - 网络连通性、本机通知和 webhook 都必须显式启用；
+- 互联网测速必须显式启用，只能使用文档指定的 macOS 工具；临时失败时保留最后
+  一次有效缓存，且测速间隔不得短于 30 分钟；
 - 用户模式不得要求 root；
 - 系统模式必须验证准确属主和权限；
 - 卸载只能删除固定的项目专属路径；
@@ -334,29 +360,34 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 - 英文和中文文档版本保持一致；
 - 下载归档的 checksum 验证成功。
 
-## 14. v1.2.0 验收标准
+## 14. v1.3.0 验收标准
 
-- [ ] CLI 输出 `remote-mac-keepawake 1.2.0`；
+- [ ] KeepAwake 与 heartbeat CLI 均输出版本 `1.3.0`；
+- [ ] Dashboard package 输出版本 `1.3.0`；
 - [ ] 可靠性测试在所有支持的 macOS runner 上通过；
 - [ ] ShellCheck 零问题；
 - [ ] 真实 launchd 重启集成测试通过；
+- [ ] Heartbeat 安装、上报、测速缓存、状态和卸载测试通过；
+- [ ] Dashboard lint、构建、路由测试和增量 migration 测试通过；
 - [ ] 英文和中文 README 完整且互相链接；
 - [ ] 英文和中文 PRD 完整且互相链接；
 - [ ] 文档测试确认版本与归档内容一致；
 - [ ] 合并后 main CI 通过；
-- [ ] tag `v1.2.0` 指向已审核的 main commit；
+- [ ] tag `v1.3.0` 指向已审核的 main commit；
 - [ ] GitHub release 包含源码包、项目归档和 `SHA256SUMS`；
-- [ ] 下载后的项目归档通过 SHA-256 校验，并包含两份 README 和两份 PRD。
+- [ ] 下载后的项目归档通过 SHA-256 校验，并包含两个 CLI、Dashboard 源码与
+  migrations、两份 README 和两份 PRD。
 
 ## 15. 发布流程
 
-1. 更新 CLI 版本、changelog、中英文 README 和中英文 PRD；
-2. 本地运行 Bash、ShellCheck、可靠性、文档、YAML 和文件权限检查；
+1. 对齐 CLI、heartbeat、dashboard、changelog、中英文 README 和 PRD 版本；
+2. 本地运行 Bash、ShellCheck、可靠性、heartbeat、dashboard、migration、文档、
+   YAML 和文件权限检查；
 3. 发布 feature branch 和 pull request；
 4. 要求托管 CI 全绿且没有未解决 review thread；
 5. 把准确的已审核 head 合并到 main；
 6. 要求合并后的 main CI 全绿；
-7. 在准确 main commit 上创建 tag `v1.2.0`；
+7. 在准确 main commit 上创建 tag `v1.3.0`；
 8. 验证 release workflow、asset 名称、归档内容和 checksum。
 
 ## 16. 风险与缓解措施
@@ -372,15 +403,15 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 | 双语文档发生漂移 | CI 执行版本、链接和归档文档测试 |
 | release 丢失可执行位 | 用 `install -m 0755` 明确构建归档 |
 
-## 17. v1.2.0 之后的路线图
+## 17. v1.3.0 之后的路线图
 
 以下方向需要另行评审，不代表承诺：
 
 - 在不增加特权 helper 的前提下提供签名或 notarized 分发；
-- 为 health watch 增加显式启用的本地 launchd 调度；
 - 支持自定义网络探测 endpoint，并提供严格隐私说明；
 - 提供机器可读的命令 schema；
 - 自动检查中英文术语一致性；
-- 为多台远程 Mac 提供不依赖集中遥测的运维手册。
+- 为多台远程 Mac 提供不依赖集中遥测的运维手册；
+- 为 release 提供签名 provenance 和软件物料清单。
 
 任何后续功能都不能削弱本地优先、失败即关闭的安全模型。

@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -17,35 +19,64 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Use pinned Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
       - name: Verify tag and tests
         shell: bash
         run: |
+          set -euo pipefail
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
           declared="$(awk -F'"' '/readonly VERSION=/{print $2; exit}' bin/remote-mac-keepawake)"
+          heartbeat_declared="$(awk -F'"' '/readonly VERSION=/{print $2; exit}' bin/remote-mac-heartbeat)"
+          dashboard_declared="$(awk -F'"' '/"version":/{print $4; exit}' dashboard/package.json)"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$declared" == "$version" ]]
-          bash -n bin/remote-mac-keepawake tests/test.sh tests/docs-test.sh
+          [[ "$heartbeat_declared" == "$version" ]]
+          [[ "$dashboard_declared" == "$version" ]]
+          bash -n bin/remote-mac-keepawake bin/remote-mac-heartbeat tests/test.sh tests/docs-test.sh tests/heartbeat-test.sh
           ./tests/test.sh
           ./tests/docs-test.sh
+          ./tests/heartbeat-test.sh
           test -x bin/remote-mac-keepawake
+          test -x bin/remote-mac-heartbeat
+          cd dashboard
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run lint
+          npm test
+          cd ..
       - name: Build mode-preserving release archive and checksum
         shell: bash
         run: |
+          set -euo pipefail
           package="remote-mac-keepawake-$GITHUB_REF_NAME"
           mkdir -p "dist/$package/bin" "dist/$package/docs"
           install -m 0755 bin/remote-mac-keepawake "dist/$package/bin/"
+          install -m 0755 bin/remote-mac-heartbeat "dist/$package/bin/"
           install -m 0644 README.md README.zh-CN.md CHANGELOG.md SECURITY.md LICENSE "dist/$package/"
           install -m 0644 docs/PRD.en.md docs/PRD.zh-CN.md "dist/$package/docs/"
+          git archive --format=tar "$GITHUB_SHA" dashboard | tar -x -C "dist/$package"
+          (cd dashboard && npm sbom --sbom-format spdx) > dist/SBOM.spdx.json
           tar -czf "dist/$package.tar.gz" -C dist "$package"
           cd dist
-          shasum -a 256 "$package.tar.gz" > SHA256SUMS
+          shasum -a 256 "$package.tar.gz" SBOM.spdx.json > SHA256SUMS
+      - name: Attest release provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/SBOM.spdx.json
+            dist/SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          dist/*.tar.gz dist/SHA256SUMS
+          dist/*.tar.gz dist/SHA256SUMS dist/SBOM.spdx.json
           --verify-tag
           --generate-notes
           --title "$GITHUB_REF_NAME"

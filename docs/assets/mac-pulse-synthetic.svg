@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Mac Pulse synthetic dashboard preview</title>
+  <desc id="desc">A dark green monitoring dashboard showing synthetic online, battery, keep-awake, internet speed, and history values.</desc>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06100e"/>
+      <stop offset="1" stop-color="#10251f"/>
+    </linearGradient>
+    <linearGradient id="chart" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#42d79f"/>
+      <stop offset="1" stop-color="#8df3c9"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+    <style>
+      text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#f1faf6}
+      .muted{fill:#a9bdb6}.green{fill:#70eabb}.amber{fill:#ffc27f}.small{font-size:14px}.label{font-size:16px}.value{font-size:30px;font-weight:700}.card{fill:#0b1a17;stroke:#29463d;stroke-width:1.5}.pill{fill:#123c30}.grid{stroke:#284139;stroke-width:1;opacity:.65}
+    </style>
+  </defs>
+  <rect width="1200" height="680" rx="28" fill="url(#page)"/>
+  <g transform="translate(48 38)">
+    <text x="0" y="32" font-size="30" font-weight="750">Mac Pulse</text>
+    <text x="0" y="58" class="muted label">Remote Mac Monitor</text>
+    <rect x="878" y="0" width="226" height="38" rx="19" fill="#352d18" stroke="#846c2a"/>
+    <text x="991" y="25" text-anchor="middle" class="amber small" font-weight="650">SYNTHETIC DEMO DATA</text>
+
+    <g transform="translate(0 92)" filter="url(#shadow)">
+      <rect width="1104" height="138" rx="20" class="card"/>
+      <circle cx="42" cy="44" r="10" fill="#70eabb"/>
+      <text x="66" y="52" font-size="25" font-weight="720">Online and protected</text>
+      <text x="32" y="87" class="muted label">Last heartbeat — exact local time</text>
+      <text x="32" y="115" class="label">Aug 21, 2026, 10:30:00 AM EDT · 8 seconds ago</text>
+      <line x1="622" y1="24" x2="622" y2="114" stroke="#29463d"/>
+      <text x="658" y="52" class="muted label">Next expected check-in</text>
+      <text x="658" y="82" font-size="22" font-weight="650">in 52 seconds</text>
+      <rect x="905" y="34" width="165" height="48" rx="24" class="pill"/>
+      <text x="988" y="65" text-anchor="middle" class="green label" font-weight="700">HEALTHY</text>
+    </g>
+
+    <g transform="translate(0 252)">
+      <g>
+        <rect width="260" height="142" rx="18" class="card"/>
+        <text x="24" y="34" class="muted label">Battery</text>
+        <text x="24" y="82" class="value">84%</text>
+        <text x="24" y="113" class="green label">Charging · AC Power</text>
+      </g>
+      <g transform="translate(282 0)">
+        <rect width="260" height="142" rx="18" class="card"/>
+        <text x="24" y="34" class="muted label">KeepAwake</text>
+        <text x="24" y="82" class="value">Verified</text>
+        <text x="24" y="113" class="green label">launchd + assertion</text>
+      </g>
+      <g transform="translate(564 0)">
+        <rect width="260" height="142" rx="18" class="card"/>
+        <text x="24" y="34" class="muted label">Download / upload</text>
+        <text x="24" y="82" class="value">342 / 53</text>
+        <text x="24" y="113" class="muted label">Mbps · measured 10:00 AM</text>
+      </g>
+      <g transform="translate(846 0)">
+        <rect width="258" height="142" rx="18" class="card"/>
+        <text x="24" y="34" class="muted label">Remote access</text>
+        <text x="24" y="82" class="value">Ready</text>
+        <text x="24" y="113" class="green label">Network + CRD passed</text>
+      </g>
+    </g>
+
+    <g transform="translate(0 416)">
+      <rect width="1104" height="172" rx="20" class="card"/>
+      <text x="24" y="36" font-size="20" font-weight="680">Battery history</text>
+      <text x="1080" y="36" text-anchor="end" class="muted small">Exact local timestamps · 24 hours</text>
+      <line x1="32" y1="76" x2="1072" y2="76" class="grid"/>
+      <line x1="32" y1="112" x2="1072" y2="112" class="grid"/>
+      <line x1="32" y1="148" x2="1072" y2="148" class="grid"/>
+      <path d="M32 122 C120 110 150 128 230 105 S360 72 452 90 S600 116 690 78 S820 98 910 62 S1010 80 1072 54" fill="none" stroke="url(#chart)" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="1072" cy="54" r="7" fill="#70eabb"/>
+      <text x="32" y="166" class="muted small">10:30 AM yesterday</text>
+      <text x="1072" y="166" text-anchor="end" class="muted small">10:30 AM today</text>
+    </g>
+  </g>
+</svg>

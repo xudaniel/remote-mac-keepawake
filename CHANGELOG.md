@@ -2,6 +2,44 @@
 
 All notable changes follow semantic versioning.
 
+## [Unreleased]
+
+## [1.3.0] - 2026-08-21
+
+### Added
+
+- Mac Pulse, an optional bilingual remote monitoring dashboard with protected
+  heartbeat ingestion, 90-second offline detection, and retained D1 history.
+- A privacy-preserving launchd heartbeat reporter that runs every 60 seconds
+  and never uploads machine identity.
+- Opt-in remote-Mac internet speed sampling with cached download, upload, idle
+  latency, responsiveness, exact measurement timestamps, retained history, and
+  CSV export. Apple `networkQuality` runs no more often than every 30 minutes
+  and defaults to every 6 hours to limit bandwidth impact.
+- A private, atomic heartbeat outbox with bounded network retries, automatic
+  recovery replay, concurrency locking, queue diagnostics, and uninstall-safe
+  preservation of unsent samples.
+- Random sample IDs and idempotent ingestion so ambiguous network retries do
+  not duplicate retained history.
+
+### Changed
+
+- CI now validates both Bash executables, all shell suites, the dashboard
+  build and lint, and additive D1 migrations without duplicate branch runs.
+- Release archives now align CLI, heartbeat, and dashboard versions and
+  include the complete dashboard source and migrations.
+- Dashboard build dependencies are refreshed, the audited dependency tree has
+  no known vulnerabilities, and CI rejects moderate-or-higher npm advisories.
+- D1 migrations use reviewed sequential SQL plus a legacy-data migration test,
+  avoiding an unnecessary vulnerable schema-generator dependency.
+
+### Fixed
+
+- Replayed heartbeat history now uses the Mac's original observation time and
+  does not emit stale historical alerts.
+- Battery state parsing now distinguishes `not charging` from `charging` and
+  normalizes malformed sensor values before emitting JSON.
+
 ## [1.2.0] - 2026-08-20
 
 ### Added

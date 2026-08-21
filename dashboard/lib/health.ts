@@ -1,4 +1,5 @@
 export type IncomingHealth = {
+  sample_id: string | null;
   timestamp: string;
   version: string;
   health: "healthy" | "unavailable" | "degraded";
@@ -13,6 +14,12 @@ export type IncomingHealth = {
   lid_closed: boolean | null;
   network_checked: number;
   network_available: boolean | null;
+  internet_speed_enabled: boolean;
+  internet_download_mbps: number | null;
+  internet_upload_mbps: number | null;
+  internet_latency_ms: number | null;
+  internet_responsiveness_rpm: number | null;
+  internet_speed_measured_at: string | null;
   chrome_checked: number;
   chrome_running: boolean | null;
 };
@@ -24,14 +31,29 @@ function nullableBoolean(value: unknown): value is boolean | null {
   return value === null || typeof value === "boolean";
 }
 
+function nullableNumber(value: unknown, maximum: number): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= maximum);
+}
+
 export function parseIncomingHealth(value: unknown): IncomingHealth | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
+  const sampleId = item.sample_id ?? null;
   const timestamp = typeof item.timestamp === "string" ? item.timestamp : "";
   const battery = item.battery_percent;
   const pid = item.pid;
+  const internetSpeedEnabled = item.internet_speed_enabled ?? false;
+  const internetDownloadMbps = item.internet_download_mbps ?? null;
+  const internetUploadMbps = item.internet_upload_mbps ?? null;
+  const internetLatencyMs = item.internet_latency_ms ?? null;
+  const internetResponsivenessRpm = item.internet_responsiveness_rpm ?? null;
+  const internetSpeedMeasuredAt = item.internet_speed_measured_at ?? null;
+  const hasSpeedMeasurement = internetSpeedMeasuredAt !== null || internetDownloadMbps !== null ||
+    internetUploadMbps !== null || internetLatencyMs !== null || internetResponsivenessRpm !== null;
 
   if (
+    !(sampleId === null || (typeof sampleId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sampleId))) ||
     !timestamp || Number.isNaN(Date.parse(timestamp)) ||
     typeof item.version !== "string" || item.version.length > 32 ||
     typeof item.health !== "string" || !healthStates.has(item.health) ||
@@ -45,9 +67,29 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
     !nullableBoolean(item.charging) || !nullableBoolean(item.lid_closed) ||
     !(item.network_checked === 0 || item.network_checked === 1) ||
     !nullableBoolean(item.network_available) ||
+    typeof internetSpeedEnabled !== "boolean" ||
+    !nullableNumber(internetDownloadMbps, 100_000) ||
+    !nullableNumber(internetUploadMbps, 100_000) ||
+    !nullableNumber(internetLatencyMs, 60_000) ||
+    !nullableNumber(internetResponsivenessRpm, 1_000_000) ||
+    !(internetSpeedMeasuredAt === null || (typeof internetSpeedMeasuredAt === "string" &&
+      !Number.isNaN(Date.parse(internetSpeedMeasuredAt)))) ||
+    (hasSpeedMeasurement && (!internetSpeedEnabled || internetDownloadMbps === null ||
+      internetUploadMbps === null || internetLatencyMs === null ||
+      internetResponsivenessRpm === null || internetSpeedMeasuredAt === null)) ||
     !(item.chrome_checked === 0 || item.chrome_checked === 1) ||
     !nullableBoolean(item.chrome_running)
   ) return null;
 
-  return item as IncomingHealth;
+  return {
+    ...item,
+    sample_id: sampleId,
+    timestamp: new Date(timestamp).toISOString(),
+    internet_speed_enabled: internetSpeedEnabled,
+    internet_download_mbps: internetDownloadMbps,
+    internet_upload_mbps: internetUploadMbps,
+    internet_latency_ms: internetLatencyMs,
+    internet_responsiveness_rpm: internetResponsivenessRpm,
+    internet_speed_measured_at: internetSpeedMeasuredAt,
+  } as IncomingHealth;
 }

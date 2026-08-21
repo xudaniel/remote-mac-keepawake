@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Product version | 1.2.0 |
+| Product version | 1.3.0 |
 | Document status | Release baseline |
 | Owner | Daniel Xu |
-| Last updated | 2026-08-20 |
+| Last updated | 2026-08-21 |
 | Platforms | macOS 14, 15, and 26 |
 | License | MIT |
 
@@ -19,9 +19,10 @@ available for remote administration by running macOS's built-in
 critical reliability defect: mutating commands report success only after the
 service state, managed PID, and active idle-sleep assertion are verified.
 
-Version 1.2.0 establishes the product and documentation baseline in English
-and Simplified Chinese. It does not expand the physical capabilities of the
-Mac. Power, networking, lid behavior, hardware, operating-system failures, and
+Version 1.3.0 adds the optional Mac Pulse remote dashboard, complete retained
+history with exact timestamps, privacy-preserving alerts, and opt-in internet
+speed measurements. It does not expand the physical capabilities of the Mac.
+Power, networking, lid behavior, hardware, operating-system failures, and
 FileVault pre-boot unlock remain outside the product boundary.
 
 ## 2. Problem statement
@@ -250,9 +251,18 @@ Failure outcome: the working user installation remains active.
 - Accepted heartbeat samples must not be automatically pruned. History APIs
   must use bounded time ranges and cursor pagination, with owner-only CSV export
   and an explicit irreversible deletion confirmation.
+- The reporter must atomically persist every sample before upload, retain
+  failures in a private local outbox, replay a bounded batch after recovery,
+  expose pending count and last-success time, and use a random idempotency ID.
+  Replays must retain observation time, avoid duplicate storage, and must not
+  trigger stale historical alerts.
 - The dashboard must expose checked, passed, failed, and unknown states for
   KeepAwake, power, network, and Chrome Remote Desktop, plus safe recovery
   guidance and a copyable secret-free summary.
+- Opt-in internet speed sampling must run on the monitored Mac, not in the
+  viewer's browser; expose download, upload, idle latency, responsiveness, and
+  an exact measurement timestamp. Cache the result between heartbeats, default
+  to a six-hour interval, and reject intervals below 30 minutes.
 - Optional alerts must deduplicate active states, record distinct recoveries,
   keep destinations out of heartbeat data and Git, and send only a minimal
   event payload.
@@ -304,6 +314,19 @@ Required fields:
 The schema must not include hostname, username, device serial number, IP
 address, webhook URL, or secrets.
 
+The optional Mac Pulse reporter appends these backward-compatible fields. An
+older reporter may omit them; an enabled reporter may use null measurements
+until the first successful test.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `internet_speed_enabled` | boolean | Explicit reporter opt-in state |
+| `internet_download_mbps` | number or null | Decimal megabits per second |
+| `internet_upload_mbps` | number or null | Decimal megabits per second |
+| `internet_latency_ms` | number or null | Idle round-trip latency |
+| `internet_responsiveness_rpm` | number or null | Round trips per minute; higher is better |
+| `internet_speed_measured_at` | string or null | UTC ISO-8601 time of the cached measurement |
+
 ## 10. Architecture
 
 ```text
@@ -319,6 +342,12 @@ Operator CLI
 launchd
     |
     +-- supervises /usr/bin/caffeinate -i
+
+Optional Mac Pulse reporter
+    |
+    +-- invokes /usr/bin/networkQuality at a bounded interval
+    +-- caches the last valid result in a mode-0600 file
+    +-- publishes the cached result with each authorized heartbeat
 ```
 
 The core CLI has no project-owned daemon binary, network server, database,
@@ -331,6 +360,9 @@ heartbeat store; the CLI remains fully usable without it.
 - Default operation must not make outbound network requests.
 - Network reachability, local notifications, and webhooks require explicit
   flags.
+- Internet speed testing must be opt-in, use the documented macOS tool, retain
+  the last valid cache after a transient failure, and never run more frequently
+  than every 30 minutes.
 - User mode must not require root.
 - System mode must validate exact ownership and modes.
 - Paths removed during uninstall must be fixed project-owned paths.
@@ -373,32 +405,36 @@ CI evidence:
 - English and Chinese document versions remain aligned;
 - release checksum validates the downloadable archive.
 
-## 14. v1.2.0 acceptance criteria
+## 14. v1.3.0 acceptance criteria
 
-- [ ] CLI reports `remote-mac-keepawake 1.2.0`.
+- [ ] KeepAwake and heartbeat CLIs report version `1.3.0`.
+- [ ] Dashboard package reports version `1.3.0`.
 - [ ] Reliability suite passes on supported macOS runners.
 - [ ] ShellCheck reports no findings.
 - [ ] Real launchd restart integration passes.
+- [ ] Heartbeat install, send, speed-cache, status, and uninstall tests pass.
+- [ ] Dashboard lint, build, route tests, and additive migration tests pass.
 - [ ] English and Chinese README files are complete and cross-linked.
 - [ ] English and Chinese PRDs are complete and cross-linked.
 - [ ] Documentation test confirms version and archive alignment.
 - [ ] Main branch CI passes after merge.
-- [ ] Tag `v1.2.0` points to the reviewed main commit.
+- [ ] Tag `v1.3.0` points to the reviewed main commit.
 - [ ] GitHub release contains source archives, project archive, and
   `SHA256SUMS`.
 - [ ] Downloaded project archive passes SHA-256 verification and contains both
-  README files and both PRDs.
+  CLIs, dashboard source and migrations, both README files, and both PRDs.
 
 ## 15. Release process
 
-1. Update CLI version, changelog, bilingual README files, and bilingual PRDs.
-2. Run Bash syntax, ShellCheck, reliability, documentation, YAML, and mode
-   checks locally.
+1. Align CLI, heartbeat, dashboard, changelog, bilingual README, and PRD
+   versions.
+2. Run Bash syntax, ShellCheck, reliability, heartbeat, dashboard, migration,
+   documentation, YAML, and mode checks locally.
 3. Publish a feature branch and pull request.
 4. Require green hosted CI and no unresolved review threads.
 5. Merge the exact reviewed head to main.
 6. Require green post-merge main CI.
-7. Create tag `v1.2.0` on the exact main commit.
+7. Create tag `v1.3.0` on the exact main commit.
 8. Verify release workflow success, asset names, archive content, and checksum.
 
 ## 16. Risks and mitigations
@@ -414,16 +450,16 @@ CI evidence:
 | Documentation drifts across languages | Run a version/link/archive documentation test in CI |
 | Release loses executable bit | Build archive with explicit `install -m 0755` |
 
-## 17. Roadmap after v1.2.0
+## 17. Roadmap after v1.3.0
 
 Potential future work, subject to separate review:
 
 - signed or notarized distribution without adding a privileged helper;
-- opt-in local launchd scheduling for health watch mode;
 - configurable network probe endpoint with strict privacy documentation;
 - machine-readable command schema documentation;
 - automated bilingual terminology checks;
-- an operator runbook for multiple remote Macs without centralized telemetry.
+- an operator runbook for multiple remote Macs without centralized telemetry;
+- signed release provenance and a software bill of materials.
 
 These items are not commitments and must not weaken the local-first,
 fail-closed safety model.

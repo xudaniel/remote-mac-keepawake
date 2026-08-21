@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a reviewable product or repository improvement.
+title: "[Feature] "
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the operator need without prescribing the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and privacy considerations
+      description: Explain privilege, outbound-network, recovery, and data-retention implications.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Proposed acceptance criteria
+      placeholder: "- [ ] Observable, testable result"
+    validations:
+      required: true

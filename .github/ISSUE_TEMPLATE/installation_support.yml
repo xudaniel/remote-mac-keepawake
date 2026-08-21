@@ -1,0 +1,44 @@
+name: Installation support
+description: Ask for help with installation, migration, recovery, or upgrade.
+title: "[Support] "
+labels: ["type:support"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not reboot or migrate an unattended FileVault Mac unless physical recovery is available. Never paste tokens or identifying machine data.
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation
+      options:
+        - User-mode install
+        - System-mode migration
+        - Upgrade
+        - Recovery check
+        - Heartbeat or dashboard setup
+        - Uninstall
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "1.3.0"
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Sanitized status and error
+      description: Remove tokens, paths containing usernames, hostnames, IP addresses, serial numbers, and URLs with credentials.
+    validations:
+      required: true
+  - type: checkboxes
+    id: recovery
+    attributes:
+      label: Recovery context
+      options:
+        - label: I understand that software cannot bypass FileVault pre-boot unlock or guarantee recovery from power, network, hardware, or lid-sleep failures.
+          required: true
+        - label: I removed secrets and identifying machine data from this request.
+          required: true

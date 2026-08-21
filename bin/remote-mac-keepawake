@@ -7,7 +7,7 @@ set -u
 set -o pipefail
 
 readonly PROGRAM_NAME="remote-mac-keepawake"
-readonly VERSION="1.2.0"
+readonly VERSION="1.3.0"
 readonly LABEL="com.xudaniel.remote-mac-keepawake"
 readonly TEST_ROOT="${RMKA_TEST_ROOT:-}"
 readonly DRY_RUN="${RMKA_DRY_RUN:-0}"
@@ -120,6 +120,19 @@ xml_escape() {
 json_escape() {
   printf '%s' "$1" | /usr/bin/sed \
     -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
+}
+
+charging_state_from_battery_output() {
+  local battery_output="$1"
+  if printf '%s\n' "$battery_output" |
+    /usr/bin/grep -Eiq 'not charging|discharging'; then
+    printf 'false\n'
+  elif printf '%s\n' "$battery_output" |
+    /usr/bin/grep -Eiq 'charging|charged'; then
+    printf 'true\n'
+  else
+    printf 'null\n'
+  fi
 }
 
 command_name="${1:-help}"
@@ -525,8 +538,8 @@ collect_health() {
 
   if [[ "$DRY_RUN" == "1" ]]; then
     health_power_source="AC Power"
-    health_battery_percent="100"
-    health_charging="true"
+    health_battery_percent="${RMKA_TEST_BATTERY_PERCENT:-100}"
+    health_charging="${RMKA_TEST_CHARGING:-true}"
     health_lid_closed="${RMKA_TEST_LID_CLOSED:-false}"
     [[ "$check_network" == "1" ]] &&
       health_network_available="${RMKA_TEST_NETWORK_AVAILABLE:-true}"
@@ -542,9 +555,9 @@ collect_health() {
       /usr/bin/sed -n 's/.*[[:space:]]\([0-9][0-9]*\)%.*/\1/p' |
       /usr/bin/head -n 1)"
     [[ -n "$health_battery_percent" ]] || health_battery_percent="null"
-    if printf '%s\n' "$battery_output" | /usr/bin/grep -Eiq 'charging|charged'; then
-      health_charging="true"
-    elif [[ "$health_battery_percent" != "null" ]]; then
+    health_charging="$(charging_state_from_battery_output "$battery_output")"
+    if [[ "$health_charging" == "null" && "$health_battery_percent" != "null" &&
+          "$health_power_source" == "Battery Power" ]]; then
       health_charging="false"
     fi
     lid_output="$(/usr/sbin/ioreg -r -k AppleClamshellState -d 4 2>/dev/null |
@@ -573,6 +586,11 @@ collect_health() {
   fi
 
   case "$health_lid_closed" in true|false|null) ;; *) health_lid_closed="null" ;; esac
+  case "$health_battery_percent" in
+    ''|*[!0-9]*) health_battery_percent="null" ;;
+    *) [[ "$health_battery_percent" -le 100 ]] || health_battery_percent="null" ;;
+  esac
+  case "$health_charging" in true|false|null) ;; *) health_charging="null" ;; esac
   case "$health_network_available" in true|false|null) ;; *) health_network_available="null" ;; esac
   case "$health_chrome_running" in true|false|null) ;; *) health_chrome_running="null" ;; esac
 

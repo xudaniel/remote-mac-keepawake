@@ -2,6 +2,7 @@
 /* eslint-disable jsx-a11y/label-has-associated-control -- localized tx() text is inside each wrapping label */
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Language = "en" | "zh";
 type AuthState = "checking" | "authorized" | "token-required";
@@ -24,6 +25,12 @@ type Sample = {
   lidClosed: boolean | null;
   networkChecked: boolean;
   networkAvailable: boolean | null;
+  internetSpeedEnabled: boolean;
+  internetDownloadMbps: number | null;
+  internetUploadMbps: number | null;
+  internetLatencyMs: number | null;
+  internetResponsivenessRpm: number | null;
+  internetSpeedMeasuredAt: string | null;
   chromeChecked: boolean;
   chromeRunning: boolean | null;
 };
@@ -134,6 +141,10 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }
 
+function formatMeasurement(value: number | null | undefined, unit: string) {
+  return value === null || value === undefined ? "—" : `${value.toFixed(1)} ${unit}`;
+}
+
 function historyTickIndices(length: number) {
   if (!length) return [];
   const last = length - 1;
@@ -142,10 +153,13 @@ function historyTickIndices(length: number) {
 
 function mergeSamples(older: Sample[], newer: Sample[]) {
   const byId = new Map([...older, ...newer].map((sample) => [sample.id, sample]));
-  return [...byId.values()].sort((left, right) => left.id - right.id);
+  return [...byId.values()].sort((left, right) =>
+    parseUtcTimestamp(left.reportedAt).getTime() - parseUtcTimestamp(right.reportedAt).getTime() ||
+    left.id - right.id);
 }
 
 export default function Dashboard() {
+  const router = useRouter();
   const [language, setLanguage] = useState<Language>("zh");
   const [authState, setAuthState] = useState<AuthState>("checking");
   const [token, setToken] = useState("");
@@ -280,6 +294,8 @@ export default function Dashboard() {
   const stale = Boolean(online && awake && currentAge !== null && currentAge > (status?.expected_check_in_seconds ?? 60) + 15);
   const overall = !online ? "offline" : !awake ? "unprotected" : stale ? "stale" : "healthy";
   const battery = latest?.batteryPercent;
+  const speedMeasuredAt = latest?.internetSpeedMeasuredAt ?? null;
+  const speedAge = speedMeasuredAt ? Math.max(0, Math.floor((clock - parseUtcTimestamp(speedMeasuredAt).getTime()) / 1_000)) : null;
   const selectedSample = history.find((sample) => sample.id === selectedSampleId) ?? history.at(-1) ?? null;
   const displayedHistory = history.length <= 120 ? history : history.filter((_, index) => index % Math.ceil(history.length / 120) === 0 || index === history.length - 1);
   const historyTicks = historyTickIndices(displayedHistory.length);
@@ -334,16 +350,16 @@ export default function Dashboard() {
     for (let index = 1; index < history.length; index += 1) {
       const before = history[index - 1];
       const after = history[index];
-      const gap = (parseUtcTimestamp(after.receivedAt).getTime() - parseUtcTimestamp(before.receivedAt).getTime()) / 1_000;
-      if (gap > 90) events.push({ key: `gap-${after.id}`, time: after.receivedAt, text: tx(`Heartbeat recovered after a ${formatDuration(Math.max(0, gap - 60), language)} gap`, `心跳在中断 ${formatDuration(Math.max(0, gap - 60), language)} 后恢复`) });
-      if (before.powerSource !== after.powerSource) events.push({ key: `power-${after.id}`, time: after.receivedAt, text: `${tx("Power changed to", "电源切换为")} ${after.powerSource}` });
-      if (before.idleSleepPrevented !== after.idleSleepPrevented) events.push({ key: `awake-${after.id}`, time: after.receivedAt, text: after.idleSleepPrevented ? tx("KeepAwake protection recovered", "KeepAwake 防护恢复") : tx("KeepAwake protection stopped", "KeepAwake 防护停止") });
-      if (before.lidClosed !== after.lidClosed) events.push({ key: `lid-${after.id}`, time: after.receivedAt, text: after.lidClosed ? tx("Lid closed", "屏幕盖关闭") : tx("Lid opened", "屏幕盖打开") });
+      const gap = (parseUtcTimestamp(after.reportedAt).getTime() - parseUtcTimestamp(before.reportedAt).getTime()) / 1_000;
+      if (gap > 90) events.push({ key: `gap-${after.id}`, time: after.reportedAt, text: tx(`Heartbeat recovered after a ${formatDuration(Math.max(0, gap - 60), language)} gap`, `心跳在中断 ${formatDuration(Math.max(0, gap - 60), language)} 后恢复`) });
+      if (before.powerSource !== after.powerSource) events.push({ key: `power-${after.id}`, time: after.reportedAt, text: `${tx("Power changed to", "电源切换为")} ${after.powerSource}` });
+      if (before.idleSleepPrevented !== after.idleSleepPrevented) events.push({ key: `awake-${after.id}`, time: after.reportedAt, text: after.idleSleepPrevented ? tx("KeepAwake protection recovered", "KeepAwake 防护恢复") : tx("KeepAwake protection stopped", "KeepAwake 防护停止") });
+      if (before.lidClosed !== after.lidClosed) events.push({ key: `lid-${after.id}`, time: after.reportedAt, text: after.lidClosed ? tx("Lid closed", "屏幕盖关闭") : tx("Lid opened", "屏幕盖打开") });
     }
     return events.slice(-12).reverse();
   }, [history, language, tx]);
   const latestTransition = historyEvents[0] ?? null;
-  const currentStateStartedAt = latestTransition?.time ?? history[0]?.receivedAt ?? latest?.receivedAt ?? null;
+  const currentStateStartedAt = latestTransition?.time ?? history[0]?.reportedAt ?? latest?.reportedAt ?? null;
   const currentStateSeconds = currentStateStartedAt ? Math.max(0, Math.floor((clock - parseUtcTimestamp(currentStateStartedAt).getTime()) / 1_000)) : null;
   const lastSuccessfulDelivery = alerts?.events.find((event) => Boolean(event.delivered)) ?? null;
 
@@ -364,7 +380,7 @@ export default function Dashboard() {
 
   function signOut() {
     if (status?.viewer_auth === "siwc") {
-      window.location.assign("/signout-with-chatgpt?return_to=%2F");
+      router.push("/signout-with-chatgpt?return_to=%2F");
       return;
     }
     sessionStorage.removeItem("mac-pulse-view-token");
@@ -406,6 +422,8 @@ export default function Dashboard() {
       `Last heartbeat: ${latest ? toIsoTimestamp(latest.receivedAt) : "none"}`,
       `Heartbeat age: ${currentAge ?? "unknown"} seconds`,
       `Power: ${latest?.powerSource ?? "unknown"}; battery: ${battery ?? "unknown"}%`,
+      `Internet speed: download ${latest?.internetDownloadMbps ?? "unknown"} Mbps; upload ${latest?.internetUploadMbps ?? "unknown"} Mbps; latency ${latest?.internetLatencyMs ?? "unknown"} ms`,
+      `Internet speed measured: ${speedMeasuredAt ? toIsoTimestamp(speedMeasuredAt) : "never"}`,
       ...diagnosticRows.map((row) => `${row.label}: ${!row.checked ? "not checked" : row.passed ? "passed" : "failed"}`),
       `Version: ${latest?.version ?? "unknown"}; mode: ${latest?.mode ?? "unknown"}`,
     ];
@@ -501,6 +519,18 @@ export default function Dashboard() {
         <article className="summary-card"><span>{tx("Battery & power", "电池与电源")}</span><strong>{battery === null || battery === undefined ? "—" : `${battery}%`} · {latest?.powerSource ?? "—"}</strong><small>{latest?.charging ? tx("Charging", "充电中") : tx("Not charging", "未充电")}</small></article>
       </section>
 
+      <section className="speed-card" aria-labelledby="speed-title">
+        <div className="section-heading"><div><span>{tx("Measured on the remote Mac", "由远程 Mac 实测")}</span><h2 id="speed-title">{tx("Internet speed", "互联网速度")}</h2></div><span className={`config-pill ${latest?.internetSpeedEnabled ? "configured" : ""}`}>{latest?.internetSpeedEnabled ? tx("Low-frequency schedule enabled", "已启用低频定时测速") : tx("Speed test not enabled", "尚未启用测速")}</span></div>
+        <div className="speed-grid">
+          <article><span>{tx("Download", "下载")}</span><strong>{formatMeasurement(latest?.internetDownloadMbps, "Mbps")}</strong></article>
+          <article><span>{tx("Upload", "上传")}</span><strong>{formatMeasurement(latest?.internetUploadMbps, "Mbps")}</strong></article>
+          <article><span>{tx("Idle latency", "空闲延迟")}</span><strong>{formatMeasurement(latest?.internetLatencyMs, "ms")}</strong></article>
+          <article><span>{tx("Responsiveness", "响应能力")}</span><strong>{formatMeasurement(latest?.internetResponsivenessRpm, "RPM")}</strong></article>
+        </div>
+        <p className="speed-timestamp">{tx("Last speed test — exact local time", "上次测速 — 本地准确时间")}: <strong><time dateTime={speedMeasuredAt ? toIsoTimestamp(speedMeasuredAt) : undefined}>{formatTime(speedMeasuredAt, language)}</time></strong>{speedAge === null ? "" : ` · ${formatAge(speedAge, language)}`}</p>
+        <p className="evidence-note">{tx("Apple networkQuality measures this remote Mac's connection. A test transfers data and can briefly compete with remote-control traffic, so the reporter caches the result instead of testing every minute. RPM means round trips per minute; higher is better.", "Apple networkQuality 测量的是这台远程 Mac 的连接。测速会传输数据，并可能短暂占用远程控制带宽，因此 reporter 会缓存结果，而不是每分钟测速。RPM 表示每分钟往返次数，越高越好。")}</p>
+      </section>
+
       <section className="diagnostics-card" aria-labelledby="diagnostics-title">
         <div className="section-heading"><div><span>{tx("Evidence-based checks", "基于数据的检查")}</span><h2 id="diagnostics-title">{tx("Remote access diagnostics", "远程连接诊断")}</h2></div><button className="secondary-button" type="button" onClick={() => void copyDiagnostics()}>{tx("Copy safe diagnostics", "复制安全诊断")}</button></div>
         <div className="diagnostic-grid">{diagnosticRows.map((row) => <article key={row.label}><div><span className={`diagnostic-icon ${!row.checked ? "unknown" : row.passed ? "passed" : "failed"}`} aria-hidden="true">{!row.checked ? "?" : row.passed ? "✓" : "!"}</span><strong>{row.label}</strong></div><p>{!row.checked ? tx("Not checked", "未检查") : row.passed ? tx("Passed", "通过") : tx("Needs attention", "需处理")}</p><small>{row.detail}</small></article>)}</div>
@@ -514,9 +544,9 @@ export default function Dashboard() {
         {range === "custom" && <form className="custom-range" onSubmit={(event) => { event.preventDefault(); if (customFrom && customTo) setAppliedCustom({ from: customFrom, to: customTo }); }}><label>{tx("From", "开始")}<input type="datetime-local" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>{tx("To", "结束")}<input type="datetime-local" value={customTo} onChange={(event) => setCustomTo(event.target.value)} /></label><button type="submit">{tx("Apply", "应用")}</button></form>}
         <div className="history-stats"><article><span>{tx("Samples", "样本")}</span><strong>{historySummary?.total_samples.toLocaleString() ?? "—"}</strong></article><article><span>{tx("Estimated uptime", "估算在线率")}</span><strong>{historySummary?.uptime_percent === null || historySummary?.uptime_percent === undefined ? "—" : `${historySummary.uptime_percent.toFixed(2)}%`}</strong></article><article><span>{tx("Detected outage time", "检测到的中断时间")}</span><strong>{formatDuration(historySummary?.outage_seconds ?? 0, language)}</strong></article><article><span>{tx("Estimated storage", "估算存储")}</span><strong>≈ {formatBytes(historySummary?.approximate_storage_bytes ?? 0)}</strong></article></div>
         <p className="evidence-note">{tx("Uptime is inferred from heartbeat gaps. Storage is an estimate; all accepted samples are kept until you delete them or the hosting lifecycle removes them.", "在线率依据心跳间隔推算；存储量为估算。所有已接收样本会保留，直到你删除或托管生命周期移除。")}</p>
-        <div className="history-scroll" role="region" aria-label={tx("Scrollable battery chart", "可滚动电量图表")}><div className="history-bars" style={{ gridTemplateColumns: `repeat(${Math.max(displayedHistory.length, 1)}, minmax(10px, 1fr))` }}>{displayedHistory.map((sample) => { const selected = selectedSample?.id === sample.id; const description = `${formatTime(sample.receivedAt, language)} · ${sample.batteryPercent ?? "—"}% · ${sample.idleSleepPrevented ? tx("protected", "已防护") : tx("unprotected", "未防护")}`; return <button key={sample.id} type="button" className={`history-bar${sample.idleSleepPrevented ? "" : " unprotected-bar"}${selected ? " is-selected" : ""}`} style={{ height: `${Math.max(8, sample.batteryPercent ?? 8)}%` }} title={description} aria-label={`${tx("Select sample", "选择样本")}: ${description}`} aria-pressed={selected} onClick={() => setSelectedSampleId(sample.id)} />; })}{!displayedHistory.length && <span className="empty-history">{historyLoading ? tx("Loading…", "载入中…") : tx("No samples in this range", "此范围没有样本")}</span>}</div></div>
-        {displayedHistory.length > 0 && <div className="history-axis">{historyTicks.map((index) => { const sample = displayedHistory[index]; const position = displayedHistory.length === 1 ? 0 : index / (displayedHistory.length - 1) * 100; return <time key={sample.id} className={index === 0 ? "axis-first" : index === displayedHistory.length - 1 ? "axis-last" : ""} style={{ left: `${position}%` }} dateTime={toIsoTimestamp(sample.receivedAt)}>{formatTime(sample.receivedAt, language, false)}</time>; })}</div>}
-        {selectedSample && <div className="history-detail" aria-live="polite"><div><span>{tx("Exact local timestamp", "本地准确时间")}</span><strong><time dateTime={toIsoTimestamp(selectedSample.receivedAt)}>{formatTime(selectedSample.receivedAt, language)}</time></strong></div><div><span>{tx("Battery", "电量")}</span><strong>{selectedSample.batteryPercent ?? "—"}%</strong></div><div><span>KeepAwake</span><strong>{selectedSample.idleSleepPrevented ? tx("Protected", "已防护") : tx("Not protected", "未防护")}</strong></div><div><span>{tx("Power", "电源")}</span><strong>{selectedSample.powerSource}</strong></div></div>}
+        <div className="history-scroll" role="region" aria-label={tx("Scrollable battery chart", "可滚动电量图表")}><div className="history-bars" style={{ gridTemplateColumns: `repeat(${Math.max(displayedHistory.length, 1)}, minmax(10px, 1fr))` }}>{displayedHistory.map((sample) => { const selected = selectedSample?.id === sample.id; const description = `${formatTime(sample.reportedAt, language)} · ${sample.batteryPercent ?? "—"}% · ${sample.idleSleepPrevented ? tx("protected", "已防护") : tx("unprotected", "未防护")}`; return <button key={sample.id} type="button" className={`history-bar${sample.idleSleepPrevented ? "" : " unprotected-bar"}${selected ? " is-selected" : ""}`} style={{ height: `${Math.max(8, sample.batteryPercent ?? 8)}%` }} title={description} aria-label={`${tx("Select sample", "选择样本")}: ${description}`} aria-pressed={selected} onClick={() => setSelectedSampleId(sample.id)} />; })}{!displayedHistory.length && <span className="empty-history">{historyLoading ? tx("Loading…", "载入中…") : tx("No samples in this range", "此范围没有样本")}</span>}</div></div>
+        {displayedHistory.length > 0 && <div className="history-axis">{historyTicks.map((index) => { const sample = displayedHistory[index]; const position = displayedHistory.length === 1 ? 0 : index / (displayedHistory.length - 1) * 100; return <time key={sample.id} className={index === 0 ? "axis-first" : index === displayedHistory.length - 1 ? "axis-last" : ""} style={{ left: `${position}%` }} dateTime={toIsoTimestamp(sample.reportedAt)}>{formatTime(sample.reportedAt, language, false)}</time>; })}</div>}
+        {selectedSample && <div className="history-detail" aria-live="polite"><div><span>{tx("Exact local timestamp", "本地准确时间")}</span><strong><time dateTime={toIsoTimestamp(selectedSample.reportedAt)}>{formatTime(selectedSample.reportedAt, language)}</time></strong></div><div><span>{tx("Battery", "电量")}</span><strong>{selectedSample.batteryPercent ?? "—"}%</strong></div><div><span>KeepAwake</span><strong>{selectedSample.idleSleepPrevented ? tx("Protected", "已防护") : tx("Not protected", "未防护")}</strong></div><div><span>{tx("Power", "电源")}</span><strong>{selectedSample.powerSource}</strong></div><div><span>{tx("Download / upload", "下载 / 上传")}</span><strong>{formatMeasurement(selectedSample.internetDownloadMbps, "Mbps")} / {formatMeasurement(selectedSample.internetUploadMbps, "Mbps")}</strong></div><div><span>{tx("Speed-test timestamp", "测速时间")}</span><strong><time dateTime={selectedSample.internetSpeedMeasuredAt ? toIsoTimestamp(selectedSample.internetSpeedMeasuredAt) : undefined}>{formatTime(selectedSample.internetSpeedMeasuredAt, language)}</time></strong></div></div>}
         {historyCursor && <button className="load-more" type="button" disabled={historyLoading} onClick={() => void loadHistory(historyCursor)}>{historyLoading ? tx("Loading…", "载入中…") : tx("Load earlier samples", "载入更早样本")}</button>}
         <div className="event-list"><h3>{tx("Detected transitions", "检测到的状态变化")}</h3>{historyEvents.length ? historyEvents.map((event) => <div key={event.key}><time dateTime={toIsoTimestamp(event.time)}>{formatTime(event.time, language)}</time><span>{event.text}</span></div>) : <p>{tx("No transitions detected in loaded samples.", "已载入样本中没有检测到状态变化。")}</p>}</div>
         {deleteOpen && <div className="danger-zone" role="group" aria-labelledby="delete-title"><h3 id="delete-title">{tx("Permanently delete all heartbeat history", "永久删除全部心跳历史")}</h3><p>{tx("This cannot be undone. Type DELETE HISTORY exactly.", "此操作无法撤销。请准确输入 DELETE HISTORY。")}</p><div><input aria-label={tx("Deletion confirmation", "删除确认文字")} value={deletePhrase} onChange={(event) => setDeletePhrase(event.target.value)} /><button type="button" disabled={deletePhrase !== "DELETE HISTORY"} onClick={() => void deleteHistory()}>{tx("Delete permanently", "永久删除")}</button></div></div>}

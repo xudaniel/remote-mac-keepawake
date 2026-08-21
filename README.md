@@ -1,11 +1,19 @@
 # Remote Mac KeepAwake
 
 [![CI](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml/badge.svg)](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/xudaniel/remote-mac-keepawake)](https://github.com/xudaniel/remote-mac-keepawake/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-70eabb.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-14%20%7C%2015%20%7C%2026-f1faf6.svg)](#supported-systems-and-ci)
 
 [English](README.md) | [简体中文](README.zh-CN.md)  
 [English PRD](docs/PRD.en.md) | [中文 PRD](docs/PRD.zh-CN.md)
 
-Current release: v1.2.0
+Current release: v1.3.0
+
+![Mac Pulse synthetic dashboard preview](docs/assets/mac-pulse-synthetic.svg)
+
+The preview uses synthetic values only. See the
+[architecture and trust boundaries](docs/ARCHITECTURE.md).
 
 Remote Mac KeepAwake runs macOS's built-in `caffeinate -i` as a verified,
 launchd-managed service. It prevents idle system sleep, restarts automatically,
@@ -171,7 +179,8 @@ hostname, username, PID, battery level, or secrets.
 The `dashboard/` app adds a private, mobile-friendly view of heartbeat
 freshness, battery level, charging and power state, lid state, launchd service,
 idle-sleep protection, version, remote-access diagnostics, alerts, and complete
-retained history with exact local timestamps.
+retained history with exact local timestamps. An optional remote-Mac speed test
+adds download, upload, idle latency, responsiveness, and its own exact timestamp.
 
 Unlike a dashboard running only on the Mac, Mac Pulse stores a minimal opt-in
 heartbeat outside the device. If no heartbeat arrives for 90 seconds, the
@@ -186,7 +195,7 @@ read -rs MAC_PULSE_SITES_TOKEN
 printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
   ./bin/remote-mac-heartbeat install \
   --url https://your-private-dashboard.example/api/heartbeat \
-  --token-stdin --sites-token-stdin --user
+  --token-stdin --sites-token-stdin --user --internet-speed
 unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 ./bin/remote-mac-heartbeat status
 ```
@@ -196,11 +205,31 @@ address, serial number, location, or credentials. The production site uses its
 owner-only identity session for viewing; its ingest key and private-site
 automation token remain separate.
 
+Before each upload, the reporter atomically saves the sample in a mode-`0700`
+private outbox. Transient failures use bounded retries; samples that still
+cannot be delivered remain on disk and are replayed in observation-time order
+after connectivity returns. Each sample has a random idempotency ID, so an
+ambiguous retry cannot create duplicate history. `status` reports
+`pending_samples` and `last_success_at`. Uninstall removes credentials but
+preserves unsent samples for a later reinstall; a long outage can therefore
+grow local disk use until delivery resumes.
+
+`--internet-speed` uses Apple's built-in `networkQuality` on the remote Mac and
+automatically enables the basic network reachability check. The 60-second
+heartbeat reuses a cached result; a new speed test runs every 21,600 seconds
+(6 hours) by default because each test transfers data and can briefly compete
+with remote-control traffic. Set a reviewed interval from 1,800 to 86,400
+seconds with `--speed-test-interval SECONDS`. Omit both flags to disable speed
+testing completely.
+
 Accepted samples are not automatically pruned. The owner can browse bounded,
 cursor-paginated 1-hour through all-time or custom ranges, inspect exact local
 timestamps and state changes, export CSV, see estimated storage and uptime, and
 use an explicit confirmed deletion workflow. Retention remains subject to the
-hosting provider's capacity and project lifecycle.
+hosting provider's capacity and project lifecycle. Speed measurements and their
+exact timestamps follow the same retention, export, and deletion lifecycle.
+Replayed samples retain the time they were observed on the Mac rather than the
+later time at which the network accepted them.
 
 Optional remote alerts deduplicate outage, battery, power, KeepAwake, network,
 and Chrome Remote Desktop transitions and record recoveries. A server-side
@@ -273,18 +302,21 @@ Every semantic-version tag publishes:
 - generated GitHub release notes;
 - GitHub source archives;
 - a mode-preserving project archive;
-- `SHA256SUMS`.
+- an SPDX software bill of materials;
+- `SHA256SUMS` and GitHub artifact provenance attestations.
 
-Verify a downloaded v1.2.0 archive:
+Verify a downloaded v1.3.0 archive:
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-tar -tzf remote-mac-keepawake-v1.2.0.tar.gz
+tar -tzf remote-mac-keepawake-v1.3.0.tar.gz
+gh attestation verify remote-mac-keepawake-v1.3.0.tar.gz \
+  --repo xudaniel/remote-mac-keepawake
 ```
 
-The archive includes this English README, the
-[Chinese README](README.zh-CN.md), the [English PRD](docs/PRD.en.md), and the
-[Chinese PRD](docs/PRD.zh-CN.md).
+The archive includes both CLIs, Mac Pulse dashboard source and migrations,
+this English README, the [Chinese README](README.zh-CN.md), the
+[English PRD](docs/PRD.en.md), and the [Chinese PRD](docs/PRD.zh-CN.md).
 
 ## Supported systems and CI
 
@@ -298,6 +330,8 @@ CI verifies:
 - rollback and cleanup boundaries;
 - valid JSON and plist output;
 - executable modes;
+- heartbeat reporter installation, sending, speed caching, and cleanup;
+- dashboard lint, build, route behavior, and additive D1 migrations;
 - bilingual documentation and release metadata;
 - a real LaunchAgent restart with a restored `pmset` assertion.
 
@@ -314,6 +348,8 @@ and roadmap are maintained in:
 ```bash
 ./tests/test.sh
 ./tests/docs-test.sh
+./tests/heartbeat-test.sh
+(cd dashboard && npm ci && npm run lint && npm test)
 ./.github/tests/launchd-integration.sh
 ```
 

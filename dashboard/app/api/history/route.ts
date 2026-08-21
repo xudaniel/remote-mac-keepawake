@@ -19,6 +19,12 @@ type RawSample = {
   lid_closed: number | null;
   network_checked: number;
   network_available: number | null;
+  internet_speed_enabled: number;
+  internet_download_mbps: number | null;
+  internet_upload_mbps: number | null;
+  internet_latency_ms: number | null;
+  internet_responsiveness_rpm: number | null;
+  internet_speed_measured_at: string | null;
   chrome_checked: number;
   chrome_running: number | null;
 };
@@ -54,6 +60,12 @@ function mapSample(row: RawSample) {
     lidClosed: nullableBoolean(row.lid_closed),
     networkChecked: Boolean(row.network_checked),
     networkAvailable: nullableBoolean(row.network_available),
+    internetSpeedEnabled: Boolean(row.internet_speed_enabled),
+    internetDownloadMbps: row.internet_download_mbps,
+    internetUploadMbps: row.internet_upload_mbps,
+    internetLatencyMs: row.internet_latency_ms,
+    internetResponsivenessRpm: row.internet_responsiveness_rpm,
+    internetSpeedMeasuredAt: row.internet_speed_measured_at,
     chromeChecked: Boolean(row.chrome_checked),
     chromeRunning: nullableBoolean(row.chrome_running),
   };
@@ -78,21 +90,22 @@ export async function GET(request: Request) {
       ORDER BY id DESC LIMIT ?
     `).bind(...pageWhere.values, limit + 1).all<RawSample>();
     const summary = await d1.prepare(`
-      SELECT COUNT(*) AS total, MIN(received_at) AS first_received_at,
-             MAX(received_at) AS last_received_at,
+      SELECT COUNT(*) AS total, MIN(reported_at) AS first_received_at,
+             MAX(reported_at) AS last_received_at,
              COALESCE(SUM(CASE WHEN idle_sleep_prevented = 1 AND service_state = 'running' THEN 1 ELSE 0 END), 0) AS protected_samples,
              MIN(battery_percent) AS min_battery, MAX(battery_percent) AS max_battery
       FROM health_samples ${rangeWhere.sql}
     `).bind(...rangeWhere.values).first<RawSummary>();
     const outage = await d1.prepare(`
       WITH ordered AS (
-        SELECT received_at, LAG(received_at) OVER (ORDER BY id) AS previous_received_at
+        SELECT reported_at AS sample_at,
+               LAG(reported_at) OVER (ORDER BY reported_at, id) AS previous_sample_at
         FROM health_samples ${rangeWhere.sql}
       )
       SELECT COALESCE(SUM(CASE
-        WHEN previous_received_at IS NOT NULL AND
-             strftime('%s', received_at) - strftime('%s', previous_received_at) > 90
-        THEN strftime('%s', received_at) - strftime('%s', previous_received_at) - 60
+        WHEN previous_sample_at IS NOT NULL AND
+             strftime('%s', sample_at) - strftime('%s', previous_sample_at) > 90
+        THEN strftime('%s', sample_at) - strftime('%s', previous_sample_at) - 60
         ELSE 0 END), 0) AS outage_seconds
       FROM ordered
     `).bind(...rangeWhere.values).first<{ outage_seconds: number }>();
@@ -100,10 +113,11 @@ export async function GET(request: Request) {
     const rawRows = page.results ?? [];
     const hasMore = rawRows.length > limit;
     const rows = rawRows.slice(0, limit);
-    const items = rows.map(mapSample).reverse();
+    const items = rows.map(mapSample).sort((left: ReturnType<typeof mapSample>, right: ReturnType<typeof mapSample>) =>
+      Date.parse(left.reportedAt) - Date.parse(right.reportedAt) || left.id - right.id);
     const total = Number(summary?.total ?? 0);
-    const firstMs = summary?.first_received_at ? Date.parse(`${summary.first_received_at.replace(" ", "T")}Z`) : 0;
-    const lastMs = summary?.last_received_at ? Date.parse(`${summary.last_received_at.replace(" ", "T")}Z`) : 0;
+    const firstMs = summary?.first_received_at ? Date.parse(summary.first_received_at) : 0;
+    const lastMs = summary?.last_received_at ? Date.parse(summary.last_received_at) : 0;
     const observedSeconds = Math.max(0, Math.floor((lastMs - firstMs) / 1_000));
     const outageSeconds = Math.min(observedSeconds, Number(outage?.outage_seconds ?? 0));
 
@@ -151,4 +165,3 @@ export async function DELETE(request: Request) {
     return Response.json({ error: "History deletion failed" }, { status: 503 });
   }
 }
-
