@@ -7,7 +7,7 @@ set -u
 set -o pipefail
 
 readonly PROGRAM_NAME="remote-mac-keepawake"
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 readonly LABEL="com.xudaniel.remote-mac-keepawake"
 readonly TEST_ROOT="${RMKA_TEST_ROOT:-}"
 readonly DRY_RUN="${RMKA_DRY_RUN:-0}"
