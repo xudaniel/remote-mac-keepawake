@@ -25,7 +25,8 @@ export async function POST(request: Request) {
 
   try {
     const db = getDb();
-    await db.insert(healthSamples).values({
+    const inserted = await db.insert(healthSamples).values({
+      sampleId: item.sample_id,
       reportedAt: item.timestamp,
       version: item.version,
       health: item.health,
@@ -48,16 +49,20 @@ export async function POST(request: Request) {
       internetSpeedMeasuredAt: item.internet_speed_measured_at,
       chromeChecked: item.chrome_checked === 1,
       chromeRunning: item.chrome_running,
-    });
+    }).onConflictDoNothing({ target: healthSamples.sampleId }).returning({ id: healthSamples.id });
 
-    try {
-      await processHeartbeatAlerts(item);
-    } catch {
-      // A delivery/configuration failure must never reject a valid heartbeat.
+    const isNewSample = inserted.length > 0;
+    const isCurrentSample = Math.abs(Date.now() - Date.parse(item.timestamp)) <= 5 * 60 * 1_000;
+    if (isNewSample && isCurrentSample) {
+      try {
+        await processHeartbeatAlerts(item);
+      } catch {
+        // A delivery/configuration failure must never reject a valid heartbeat.
+      }
     }
 
     return Response.json(
-      { accepted: true },
+      { accepted: true, duplicate: !isNewSample },
       { status: 202, headers: { "Cache-Control": "no-store" } },
     );
   } catch {

@@ -43,6 +43,14 @@ accepted heartbeat samples; they remain in the site's D1 database until the
 owner removes the data or the site. Storage is still subject to the hosting
 provider's capacity and lifecycle limits. The reporter is opt-in and stores
 its ingest token in a mode-`0600` local file.
+
+The reporter also writes every sample atomically to a private local outbox
+before upload. Failed samples are retried and replayed after recovery, while a
+random sample ID makes server ingestion idempotent. Replayed samples retain
+their original observation timestamp, and stale replay never triggers a fresh
+alert. `remote-mac-heartbeat status` exposes the queue depth and last successful
+delivery. Uninstall preserves queued samples but removes their credentials.
+
 For an owner-only Sites deployment, its separate automation bypass token is
 also stored in a mode-`0600` file and sent only in the Sites authorization
 header.

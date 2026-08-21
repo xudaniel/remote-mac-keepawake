@@ -1,4 +1,5 @@
 export type IncomingHealth = {
+  sample_id: string | null;
   timestamp: string;
   version: string;
   health: "healthy" | "unavailable" | "degraded";
@@ -37,6 +38,7 @@ function nullableNumber(value: unknown, maximum: number): value is number | null
 export function parseIncomingHealth(value: unknown): IncomingHealth | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
+  const sampleId = item.sample_id ?? null;
   const timestamp = typeof item.timestamp === "string" ? item.timestamp : "";
   const battery = item.battery_percent;
   const pid = item.pid;
@@ -50,6 +52,8 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
     internetUploadMbps !== null || internetLatencyMs !== null || internetResponsivenessRpm !== null;
 
   if (
+    !(sampleId === null || (typeof sampleId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sampleId))) ||
     !timestamp || Number.isNaN(Date.parse(timestamp)) ||
     typeof item.version !== "string" || item.version.length > 32 ||
     typeof item.health !== "string" || !healthStates.has(item.health) ||
@@ -79,6 +83,8 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
 
   return {
     ...item,
+    sample_id: sampleId,
+    timestamp: new Date(timestamp).toISOString(),
     internet_speed_enabled: internetSpeedEnabled,
     internet_download_mbps: internetDownloadMbps,
     internet_upload_mbps: internetUploadMbps,

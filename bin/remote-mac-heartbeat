@@ -12,6 +12,7 @@ readonly TEST_ROOT="${RMKA_DASH_TEST_ROOT:-}"
 readonly CURL_BIN="${RMKA_DASH_CURL:-/usr/bin/curl}"
 readonly PLUTIL_BIN="${RMKA_DASH_PLUTIL:-/usr/bin/plutil}"
 readonly NETWORK_QUALITY_BIN="${RMKA_DASH_NETWORK_QUALITY:-/usr/bin/networkQuality}"
+readonly UUIDGEN_BIN="${RMKA_DASH_UUIDGEN:-/usr/bin/uuidgen}"
 
 if [[ -n "$TEST_ROOT" ]]; then
   readonly USER_BASE="$TEST_ROOT/user"
@@ -25,6 +26,10 @@ readonly SITES_TOKEN_FILE="$CONFIG_DIR/sites-bypass-token"
 readonly MODE_FILE="$CONFIG_DIR/mode"
 readonly SPEED_INTERVAL_FILE="$CONFIG_DIR/internet-speed-interval"
 readonly SPEED_CACHE_FILE="$CONFIG_DIR/internet-speed.json"
+readonly OUTBOX_DIR="$CONFIG_DIR/outbox"
+readonly LAST_SUCCESS_FILE="$CONFIG_DIR/last-success"
+readonly SEND_LOCK_DIR="$CONFIG_DIR/send.lock"
+readonly MAX_REPLAY_PER_RUN="${RMKA_DASH_MAX_REPLAY_PER_RUN:-20}"
 readonly INSTALL_DIR="$USER_BASE/.local/bin"
 readonly INSTALLED_CLI="$INSTALL_DIR/$PROGRAM_NAME"
 readonly PLIST_DIR="$USER_BASE/Library/LaunchAgents"
@@ -58,6 +63,10 @@ Internet speed testing is disabled unless --internet-speed or
 can temporarily compete with remote-control traffic. Results are measured on
 the remote Mac with Apple's built-in networkQuality tool and cached between
 60-second heartbeats.
+
+Every sample is written to a private local outbox before upload. Failed
+uploads stay on disk and are replayed automatically after connectivity returns.
+The status command reports the pending sample count and last successful upload.
 EOF
 }
 
@@ -100,6 +109,135 @@ keepawake_cli() {
 
 valid_number() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+generate_sample_id() {
+  local sample_id=""
+  [[ -x "$UUIDGEN_BIN" ]] || die "uuidgen is required to create an idempotent heartbeat sample."
+  sample_id="$("$UUIDGEN_BIN" | /usr/bin/tr '[:upper:]' '[:lower:]')" ||
+    die "Could not generate a heartbeat sample ID."
+  [[ "$sample_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
+    die "uuidgen returned an invalid heartbeat sample ID."
+  printf '%s\n' "$sample_id"
+}
+
+outbox_count() {
+  local count=0 path=""
+  if [[ -d "$OUTBOX_DIR" ]]; then
+    for path in "$OUTBOX_DIR"/*.json; do
+      [[ -f "$path" ]] || continue
+      count=$((count + 1))
+    done
+  fi
+  printf '%s\n' "$count"
+}
+
+release_send_lock() {
+  /bin/rm -f "$SEND_LOCK_DIR/pid" >/dev/null 2>&1 || true
+  /bin/rmdir "$SEND_LOCK_DIR" >/dev/null 2>&1 || true
+}
+
+acquire_send_lock() {
+  local lock_pid=""
+  /bin/mkdir -p "$CONFIG_DIR" "$OUTBOX_DIR" ||
+    die "Could not create the heartbeat outbox."
+  /bin/chmod 0700 "$CONFIG_DIR" "$OUTBOX_DIR" ||
+    die "Could not protect the heartbeat outbox."
+
+  if ! /bin/mkdir "$SEND_LOCK_DIR" 2>/dev/null; then
+    lock_pid="$(read_config_line "$SEND_LOCK_DIR/pid" 2>/dev/null)" || lock_pid=""
+    if [[ "$lock_pid" =~ ^[0-9]+$ ]] && /bin/kill -0 "$lock_pid" 2>/dev/null; then
+      die "Another heartbeat send is already running."
+    fi
+    /bin/rm -f "$SEND_LOCK_DIR/pid" >/dev/null 2>&1 || true
+    /bin/rmdir "$SEND_LOCK_DIR" >/dev/null 2>&1 ||
+      die "Heartbeat send lock is unavailable."
+    /bin/mkdir "$SEND_LOCK_DIR" 2>/dev/null ||
+      die "Could not acquire the heartbeat send lock."
+  fi
+  printf '%s\n' "$$" > "$SEND_LOCK_DIR/pid" || {
+    release_send_lock
+    die "Could not initialize the heartbeat send lock."
+  }
+  /bin/chmod 0700 "$SEND_LOCK_DIR" || {
+    release_send_lock
+    die "Could not protect the heartbeat send lock."
+  }
+  trap release_send_lock EXIT
+  trap 'release_send_lock; exit 130' INT
+  trap 'release_send_lock; exit 143' TERM
+}
+
+queue_payload() {
+  local payload="$1" sample_id="$2" staged="" destination=""
+  staged="$(/usr/bin/mktemp "$OUTBOX_DIR/.heartbeat.XXXXXX")" ||
+    die "Could not stage the heartbeat sample."
+  destination="$OUTBOX_DIR/heartbeat-$(/bin/date -u '+%Y%m%dT%H%M%SZ')-$sample_id.json"
+  printf '%s\n' "$payload" > "$staged" || {
+    /bin/rm -f "$staged"
+    die "Could not write the heartbeat sample."
+  }
+  /bin/chmod 0600 "$staged" || {
+    /bin/rm -f "$staged"
+    die "Could not protect the heartbeat sample."
+  }
+  /bin/mv -f "$staged" "$destination" || {
+    /bin/rm -f "$staged"
+    die "Could not commit the heartbeat sample to the outbox."
+  }
+  printf '%s\n' "$destination"
+}
+
+record_success() {
+  local accepted_at="" staged=""
+  accepted_at="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  staged="$(/usr/bin/mktemp "$CONFIG_DIR/.last-success.XXXXXX")" || return 1
+  printf '%s\n' "$accepted_at" > "$staged" || {
+    /bin/rm -f "$staged"
+    return 1
+  }
+  /bin/chmod 0600 "$staged" || {
+    /bin/rm -f "$staged"
+    return 1
+  }
+  /bin/mv -f "$staged" "$LAST_SUCCESS_FILE" || {
+    /bin/rm -f "$staged"
+    return 1
+  }
+}
+
+upload_payload_file() {
+  local path="$1" endpoint="$2" token="$3" sites_token="$4"
+  local -a curl_headers=()
+  [[ -r "$path" ]] || return 1
+  curl_headers=(--header "Authorization: Bearer $token")
+  if [[ -n "$sites_token" ]]; then
+    curl_headers+=(--header "OAI-Sites-Authorization: Bearer $sites_token")
+  fi
+  "$CURL_BIN" --fail-with-body --silent --show-error --max-time 20 \
+    --retry 2 --retry-delay 2 --retry-max-time 30 --retry-connrefused \
+    --request POST \
+    "${curl_headers[@]}" \
+    --header 'Content-Type: application/json' \
+    --data-binary "@$path" \
+    "$endpoint" >/dev/null
+}
+
+replay_outbox() {
+  local current_path="$1" endpoint="$2" token="$3" sites_token="$4"
+  local path="" replayed=0
+  for path in "$OUTBOX_DIR"/*.json; do
+    [[ -f "$path" && "$path" != "$current_path" ]] || continue
+    [[ "$replayed" -lt "$MAX_REPLAY_PER_RUN" ]] || break
+    if upload_payload_file "$path" "$endpoint" "$token" "$sites_token"; then
+      /bin/rm -f "$path" || return 1
+      record_success || true
+      replayed=$((replayed + 1))
+    else
+      break
+    fi
+  done
+  printf '%s\n' "$replayed"
 }
 
 read_speed_cache() {
@@ -151,18 +289,21 @@ measure_internet_speed() {
 }
 
 append_internet_speed() {
-  local payload="$1" enabled="$2" measured_json="null"
+  local payload="$1" enabled="$2" sample_id="$3" measured_json="null"
   [[ -n "$speed_measured_at" ]] && measured_json="\"$speed_measured_at\""
-  printf '%s,"internet_speed_enabled":%s,"internet_download_mbps":%s,"internet_upload_mbps":%s,"internet_latency_ms":%s,"internet_responsiveness_rpm":%s,"internet_speed_measured_at":%s}\n' \
-    "${payload%\}}" "$enabled" "$speed_download_mbps" "$speed_upload_mbps" \
+  printf '%s,"sample_id":"%s","internet_speed_enabled":%s,"internet_download_mbps":%s,"internet_upload_mbps":%s,"internet_latency_ms":%s,"internet_responsiveness_rpm":%s,"internet_speed_measured_at":%s}\n' \
+    "${payload%\}}" "$sample_id" "$enabled" "$speed_download_mbps" "$speed_upload_mbps" \
     "$speed_latency_ms" "$speed_responsiveness_rpm" "$measured_json"
 }
 
 send_heartbeat() {
   local endpoint="" token="" sites_token="" cli="" mode="" payload="" health_rc=0
   local speed_interval="0" speed_enabled="false" now_epoch=0 cache_epoch=0
+  local current_path="" replayed=0 pending=0 accepted_at="" sample_id=""
   local -a health_args=()
-  local -a curl_headers=()
+  [[ "$MAX_REPLAY_PER_RUN" =~ ^[0-9]+$ ]] &&
+    [[ "$MAX_REPLAY_PER_RUN" -ge 1 && "$MAX_REPLAY_PER_RUN" -le 500 ]] ||
+    die "RMKA_DASH_MAX_REPLAY_PER_RUN must be between 1 and 500."
   endpoint="$(read_config_line "$ENDPOINT_FILE")" || die "Heartbeat endpoint is not configured."
   token="$(read_config_line "$TOKEN_FILE")" || die "Ingest token is not configured."
   sites_token="$(read_config_line "$SITES_TOKEN_FILE")" || sites_token=""
@@ -173,6 +314,7 @@ send_heartbeat() {
     [[ "$endpoint" == https://*/api/heartbeat ]] ||
       die "Endpoint must use HTTPS and end with /api/heartbeat."
   fi
+  acquire_send_lock
 
   speed_interval="$(read_config_line "$SPEED_INTERVAL_FILE")" || speed_interval="0"
   [[ "$speed_interval" =~ ^[0-9]+$ ]] || speed_interval="0"
@@ -207,20 +349,26 @@ send_heartbeat() {
     speed_responsiveness_rpm="null"
     speed_measured_at=""
   fi
-  payload="$(append_internet_speed "$payload" "$speed_enabled")"
+  sample_id="$(generate_sample_id)" || die "Could not generate a heartbeat sample ID."
+  payload="$(append_internet_speed "$payload" "$speed_enabled" "$sample_id")"
+  current_path="$(queue_payload "$payload" "$sample_id")" ||
+    die "Could not queue the heartbeat sample."
 
-  curl_headers=(--header "Authorization: Bearer $token")
-  if [[ -n "$sites_token" ]]; then
-    curl_headers+=(--header "OAI-Sites-Authorization: Bearer $sites_token")
+  replayed="$(replay_outbox "$current_path" "$endpoint" "$token" "$sites_token")" ||
+    replayed=0
+  if upload_payload_file "$current_path" "$endpoint" "$token" "$sites_token"; then
+    /bin/rm -f "$current_path" ||
+      die "Heartbeat was accepted but could not be removed from the outbox."
+    record_success || true
+  else
+    pending="$(outbox_count)"
+    die "Heartbeat upload failed; $pending sample(s) are safely queued for retry."
   fi
-  "$CURL_BIN" --fail-with-body --silent --show-error --max-time 20 \
-    --request POST \
-    "${curl_headers[@]}" \
-    --header 'Content-Type: application/json' \
-    --data-binary "$payload" \
-    "$endpoint" >/dev/null || die "Heartbeat upload failed."
-  printf 'Heartbeat accepted at %s (health exit %s).\n' \
-    "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$health_rc"
+  pending="$(outbox_count)"
+  accepted_at="$(read_config_line "$LAST_SUCCESS_FILE" 2>/dev/null)" ||
+    accepted_at="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf 'Heartbeat accepted at %s (health exit %s, replayed %s, pending %s).\n' \
+    "$accepted_at" "$health_rc" "$replayed" "$pending"
 }
 
 install_agent() {
@@ -231,9 +379,10 @@ install_agent() {
       die "--url must use HTTPS and end with /api/heartbeat."
   fi
 
-  /bin/mkdir -p "$CONFIG_DIR" "$INSTALL_DIR" "$PLIST_DIR" "$LOG_DIR" ||
+  /bin/mkdir -p "$CONFIG_DIR" "$OUTBOX_DIR" "$INSTALL_DIR" "$PLIST_DIR" "$LOG_DIR" ||
     die "Could not create heartbeat directories."
-  /bin/chmod 0700 "$CONFIG_DIR" || die "Could not protect the configuration directory."
+  /bin/chmod 0700 "$CONFIG_DIR" "$OUTBOX_DIR" ||
+    die "Could not protect the configuration directory."
   /usr/bin/install -m 0755 "$0" "$INSTALLED_CLI" || die "Could not install the heartbeat command."
   printf '%s\n' "$endpoint" > "$ENDPOINT_FILE" || die "Could not store the endpoint."
   printf '%s\n' "$token" > "$TOKEN_FILE" || die "Could not store the ingest token."
@@ -287,6 +436,7 @@ EOF
 status_agent() {
   local configured="false" loaded="false" mode="unknown" private_auth="false"
   local speed_interval="0" speed_enabled="false" speed_measured_at=""
+  local pending_samples=0 last_success_at=""
   [[ -s "$ENDPOINT_FILE" && -s "$TOKEN_FILE" && -s "$MODE_FILE" ]] && configured="true"
   mode="$(config_mode 2>/dev/null)" || mode="unknown"
   [[ -s "$SITES_TOKEN_FILE" ]] && private_auth="true"
@@ -301,8 +451,11 @@ status_agent() {
   elif /bin/launchctl print "gui/$(/usr/bin/id -u)/$LABEL" >/dev/null 2>&1; then
     loaded="true"
   fi
-  printf '{"version":"%s","configured":%s,"launch_agent_loaded":%s,"private_sites_auth":%s,"mode":"%s","interval_seconds":60,"internet_speed_enabled":%s,"internet_speed_interval_seconds":%s,"internet_speed_measured_at":"%s"}\n' \
-    "$VERSION" "$configured" "$loaded" "$private_auth" "$mode" "$speed_enabled" "$speed_interval" "$speed_measured_at"
+  pending_samples="$(outbox_count)"
+  last_success_at="$(read_config_line "$LAST_SUCCESS_FILE" 2>/dev/null)" || last_success_at=""
+  printf '{"version":"%s","configured":%s,"launch_agent_loaded":%s,"private_sites_auth":%s,"mode":"%s","interval_seconds":60,"pending_samples":%s,"last_success_at":"%s","internet_speed_enabled":%s,"internet_speed_interval_seconds":%s,"internet_speed_measured_at":"%s"}\n' \
+    "$VERSION" "$configured" "$loaded" "$private_auth" "$mode" "$pending_samples" \
+    "$last_success_at" "$speed_enabled" "$speed_interval" "$speed_measured_at"
   [[ "$configured" == "true" && "$loaded" == "true" ]]
 }
 
@@ -313,7 +466,8 @@ uninstall_agent() {
   /bin/rm -f "$PLIST_PATH" "$INSTALLED_CLI" "$ENDPOINT_FILE" "$TOKEN_FILE" \
     "$SITES_TOKEN_FILE" "$MODE_FILE" "$SPEED_INTERVAL_FILE" "$SPEED_CACHE_FILE"
   /bin/rmdir "$CONFIG_DIR" >/dev/null 2>&1 || true
-  printf 'Removed the heartbeat agent and its private credentials. Logs were preserved in %s\n' "$LOG_DIR"
+  printf 'Removed the heartbeat agent and its private credentials. Logs and queued samples were preserved in %s and %s\n' \
+    "$LOG_DIR" "$OUTBOX_DIR"
 }
 
 command_name="${1:-help}"

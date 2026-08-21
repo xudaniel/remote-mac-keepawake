@@ -44,10 +44,11 @@ test("checks separate view and ingest authorization before database access", asy
 });
 
 test("ships additive D1 migrations and no real secrets", async () => {
-  const [initialMigration, featureMigration, speedMigration, example, hosting] = await Promise.all([
+  const [initialMigration, featureMigration, speedMigration, deliveryMigration, example, hosting] = await Promise.all([
     readFile(new URL("../drizzle/0000_lumpy_susan_delgado.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0001_late_stranger.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0002_ambitious_lightspeed.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0003_lush_grim_reaper.sql", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
@@ -59,6 +60,10 @@ test("ships additive D1 migrations and no real secrets", async () => {
   assert.match(speedMigration, /internet_download_mbps/);
   assert.match(speedMigration, /internet_speed_measured_at/);
   assert.doesNotMatch(speedMigration, /DROP TABLE|DELETE FROM/i);
+  assert.match(deliveryMigration, /sample_id/);
+  assert.match(deliveryMigration, /UNIQUE INDEX/);
+  assert.match(deliveryMigration, /reported_at_idx/);
+  assert.doesNotMatch(deliveryMigration, /DROP TABLE|DELETE FROM/i);
   assert.match(example, /replace-with-a-long-random-secret/);
   assert.match(example, /ALERT_WEBHOOK_URL/);
   assert.match(hosting, /"d1": "DB"/);
@@ -75,6 +80,7 @@ test("battery history exposes local timestamps and selectable samples", async ()
   assert.match(dashboard, /timeZoneName: exact/);
   assert.match(dashboard, /aria-pressed=\{selected\}/);
   assert.match(dashboard, /dateTime=\{toIsoTimestamp/);
+  assert.match(dashboard, /selectedSample\.reportedAt/);
   assert.match(styles, /\.history-axis/);
   assert.match(styles, /\.history-detail/);
 });
@@ -92,6 +98,22 @@ test("remote internet speed includes cached measurements and an exact timestamp"
   assert.match(heartbeat, /internetSpeedMeasuredAt/);
   assert.match(historyExport, /internet_speed_measured_at/);
   assert.match(health, /internet_speed_enabled \?\? false/);
+});
+
+test("heartbeat replay is idempotent and preserves observation time", async () => {
+  const [heartbeat, health, history, dashboard] = await Promise.all([
+    readFile(new URL("../app/api/heartbeat/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/health.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/history.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/Dashboard.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(heartbeat, /onConflictDoNothing/);
+  assert.match(heartbeat, /duplicate: !isNewSample/);
+  assert.match(heartbeat, /isCurrentSample/);
+  assert.match(health, /sample_id/);
+  assert.match(history, /reported_at >=/);
+  assert.match(history, /reported_at <=/);
+  assert.match(dashboard, /left\.reportedAt/);
 });
 
 test("implements paginated owner-only history lifecycle", async () => {

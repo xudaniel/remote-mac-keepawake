@@ -251,6 +251,11 @@ Failure outcome: the working user installation remains active.
 - Accepted heartbeat samples must not be automatically pruned. History APIs
   must use bounded time ranges and cursor pagination, with owner-only CSV export
   and an explicit irreversible deletion confirmation.
+- The reporter must atomically persist every sample before upload, retain
+  failures in a private local outbox, replay a bounded batch after recovery,
+  expose pending count and last-success time, and use a random idempotency ID.
+  Replays must retain observation time, avoid duplicate storage, and must not
+  trigger stale historical alerts.
 - The dashboard must expose checked, passed, failed, and unknown states for
   KeepAwake, power, network, and Chrome Remote Desktop, plus safe recovery
   guidance and a copyable secret-free summary.

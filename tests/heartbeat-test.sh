@@ -20,6 +20,12 @@ EOF
 cat > "$TEST_AREA/bin/curl" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" > "$TEST_AREA/curl-args"
+for argument in "\$@"; do
+  case "\$argument" in
+    @*) /bin/cat "\${argument#@}" >> "$TEST_AREA/curl-payloads" ;;
+  esac
+done
+[[ ! -e "$TEST_AREA/curl-fail" ]]
 EOF
 cat > "$TEST_AREA/bin/networkQuality" <<'EOF'
 #!/bin/bash
@@ -48,6 +54,7 @@ assert_file "$config/sites-bypass-token"
 assert_file "$plist"
 assert_mode "$config" 700
 assert_mode "$config/ingest-token" 600
+assert_mode "$config/outbox" 700
 "$ROOT/bin/remote-mac-heartbeat" version | /usr/bin/grep -q '1.3.0' || fail "Version failed"
 
 RMKA_DASH_TEST_ROOT="$TEST_AREA" RMKA_DASH_ALLOW_HTTP=1 \
@@ -59,12 +66,15 @@ RMKA_HEALTH_ARGS_LOG="$TEST_AREA/health-args" RMKA_SPEED_CALLS_LOG="$TEST_AREA/s
   fail "Authorization header missing"
 /usr/bin/grep -q 'OAI-Sites-Authorization: Bearer test-sites-secret' "$TEST_AREA/curl-args" ||
   fail "Sites authorization header missing"
-/usr/bin/grep -q 'battery_percent' "$TEST_AREA/curl-args" || fail "JSON payload missing"
+/usr/bin/grep -q 'battery_percent' "$TEST_AREA/curl-payloads" || fail "JSON payload missing"
+/usr/bin/grep -Eq '"sample_id":"[0-9a-f-]{36}"' "$TEST_AREA/curl-payloads" ||
+  fail "Idempotent sample ID missing"
+/usr/bin/grep -q -- '--retry 2' "$TEST_AREA/curl-args" || fail "Upload retry policy missing"
 /usr/bin/grep -q -- '--network' "$TEST_AREA/health-args" || fail "Network check was not enabled"
-/usr/bin/grep -q 'internet_download_mbps.*34.2' "$TEST_AREA/curl-args" || fail "Download speed missing"
-/usr/bin/grep -q 'internet_upload_mbps.*53.2' "$TEST_AREA/curl-args" || fail "Upload speed missing"
-/usr/bin/grep -q 'internet_latency_ms.*25.4' "$TEST_AREA/curl-args" || fail "Latency missing"
-/usr/bin/grep -q 'internet_responsiveness_rpm.*195.1' "$TEST_AREA/curl-args" || fail "Responsiveness missing"
+/usr/bin/grep -q 'internet_download_mbps.*34.2' "$TEST_AREA/curl-payloads" || fail "Download speed missing"
+/usr/bin/grep -q 'internet_upload_mbps.*53.2' "$TEST_AREA/curl-payloads" || fail "Upload speed missing"
+/usr/bin/grep -q 'internet_latency_ms.*25.4' "$TEST_AREA/curl-payloads" || fail "Latency missing"
+/usr/bin/grep -q 'internet_responsiveness_rpm.*195.1' "$TEST_AREA/curl-payloads" || fail "Responsiveness missing"
 
 RMKA_DASH_TEST_ROOT="$TEST_AREA" RMKA_DASH_ALLOW_HTTP=1 \
 RMKA_DASH_CLI="$TEST_AREA/bin/health" RMKA_DASH_CURL="$TEST_AREA/bin/curl" \
@@ -74,12 +84,47 @@ RMKA_HEALTH_ARGS_LOG="$TEST_AREA/health-args" RMKA_SPEED_CALLS_LOG="$TEST_AREA/s
 [[ "$(/usr/bin/wc -l < "$TEST_AREA/speed-calls" | /usr/bin/tr -d ' ')" == "1" ]] ||
   fail "Speed test cache was not reused"
 
+printf 'fail\n' > "$TEST_AREA/curl-fail"
+if RMKA_DASH_TEST_ROOT="$TEST_AREA" RMKA_DASH_ALLOW_HTTP=1 \
+  RMKA_DASH_CLI="$TEST_AREA/bin/health" RMKA_DASH_CURL="$TEST_AREA/bin/curl" \
+  RMKA_DASH_NETWORK_QUALITY="$TEST_AREA/bin/networkQuality" \
+  RMKA_HEALTH_ARGS_LOG="$TEST_AREA/health-args" RMKA_SPEED_CALLS_LOG="$TEST_AREA/speed-calls" \
+    "$ROOT/bin/remote-mac-heartbeat" send >/dev/null 2>&1; then
+  fail "Failed upload was reported as successful"
+fi
+[[ "$(find "$config/outbox" -type f -name '*.json' | /usr/bin/wc -l | /usr/bin/tr -d ' ')" == "1" ]] ||
+  fail "Failed heartbeat was not retained in the outbox"
+/bin/rm -f "$TEST_AREA/curl-fail"
+RMKA_DASH_TEST_ROOT="$TEST_AREA" RMKA_DASH_ALLOW_HTTP=1 \
+RMKA_DASH_CLI="$TEST_AREA/bin/health" RMKA_DASH_CURL="$TEST_AREA/bin/curl" \
+RMKA_DASH_NETWORK_QUALITY="$TEST_AREA/bin/networkQuality" \
+RMKA_HEALTH_ARGS_LOG="$TEST_AREA/health-args" RMKA_SPEED_CALLS_LOG="$TEST_AREA/speed-calls" \
+  "$ROOT/bin/remote-mac-heartbeat" send >/dev/null || fail "Outbox replay failed"
+[[ "$(find "$config/outbox" -type f -name '*.json' | /usr/bin/wc -l | /usr/bin/tr -d ' ')" == "0" ]] ||
+  fail "Outbox did not drain after connectivity recovered"
+
+/bin/mkdir -p "$config/send.lock"
+printf '%s\n' "$$" > "$config/send.lock/pid"
+if RMKA_DASH_TEST_ROOT="$TEST_AREA" RMKA_DASH_ALLOW_HTTP=1 \
+  RMKA_DASH_CLI="$TEST_AREA/bin/health" RMKA_DASH_CURL="$TEST_AREA/bin/curl" \
+    "$ROOT/bin/remote-mac-heartbeat" send >/dev/null 2>&1; then
+  fail "Concurrent heartbeat send was not rejected"
+fi
+/bin/rm -f "$config/send.lock/pid"
+/bin/rmdir "$config/send.lock"
+
 RMKA_DASH_TEST_ROOT="$TEST_AREA" "$ROOT/bin/remote-mac-heartbeat" status |
   /usr/bin/grep -q '"configured":true' || fail "Status failed"
 RMKA_DASH_TEST_ROOT="$TEST_AREA" "$ROOT/bin/remote-mac-heartbeat" status |
   /usr/bin/grep -q '"internet_speed_enabled":true' || fail "Speed-test status missing"
+RMKA_DASH_TEST_ROOT="$TEST_AREA" "$ROOT/bin/remote-mac-heartbeat" status |
+  /usr/bin/grep -q '"pending_samples":0' || fail "Outbox status missing"
+RMKA_DASH_TEST_ROOT="$TEST_AREA" "$ROOT/bin/remote-mac-heartbeat" status |
+  /usr/bin/grep -Eq '"last_success_at":"[0-9]{4}-' || fail "Last-success status missing"
+printf '%s\n' '{"preserved":true}' > "$config/outbox/preserved.json"
 RMKA_DASH_TEST_ROOT="$TEST_AREA" "$ROOT/bin/remote-mac-heartbeat" uninstall >/dev/null ||
   fail "Uninstall failed"
 [[ ! -e "$config/ingest-token" ]] || fail "Token survived uninstall"
+assert_file "$config/outbox/preserved.json"
 
-printf 'PASS: private heartbeat install, send, status, and uninstall\n'
+printf 'PASS: private heartbeat delivery, replay, status, locking, and uninstall\n'

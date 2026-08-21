@@ -170,6 +170,21 @@ malformed_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
   fail "Malformed sensor output should be normalized"
 assert_json "$malformed_output"
 assert_contains_text "$malformed_output" '"lid_closed":null'
+low_battery_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_PERCENT=19 RMKA_TEST_CHARGING=false \
+  /bin/bash "$CLI" health --system --json)"
+low_battery_rc=$?
+assert_eq "$low_battery_rc" "2"
+assert_contains_text "$low_battery_output" '"battery_percent":19'
+assert_contains_text "$low_battery_output" '"charging":false'
+assert_contains_text "$low_battery_output" '"health":"degraded"'
+invalid_battery_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_PERCENT=invalid RMKA_TEST_CHARGING=invalid \
+  /bin/bash "$CLI" health --system --json)" ||
+  fail "Malformed battery output should be normalized"
+assert_json "$invalid_battery_output"
+assert_contains_text "$invalid_battery_output" '"battery_percent":null'
+assert_contains_text "$invalid_battery_output" '"charging":null'
 unavailable_output="$(run_cli_fail_step assertion health --system --json)"
 unavailable_rc=$?
 assert_eq "$unavailable_rc" "1"

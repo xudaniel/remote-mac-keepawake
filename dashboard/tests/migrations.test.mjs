@@ -7,6 +7,7 @@ const migrations = [
   "0000_lumpy_susan_delgado.sql",
   "0001_late_stranger.sql",
   "0002_ambitious_lightspeed.sql",
+  "0003_lush_grim_reaper.sql",
 ];
 
 test("D1 migrations are additive and preserve an existing heartbeat", async () => {
@@ -35,5 +36,9 @@ test("D1 migrations are additive and preserve an existing heartbeat", async () =
   const columns = db.prepare("PRAGMA table_info(health_samples)").all().map(({ name }) => name);
   assert.ok(columns.includes("internet_speed_measured_at"));
   assert.ok(columns.includes("internet_download_mbps"));
+  assert.ok(columns.includes("sample_id"));
+  const indexes = db.prepare("PRAGMA index_list(health_samples)").all();
+  assert.ok(indexes.some(({ name, unique }) => name === "health_samples_sample_id_unique" && unique === 1));
+  assert.ok(indexes.some(({ name }) => name === "health_samples_reported_at_idx"));
   assert.equal(db.prepare("SELECT version FROM health_samples WHERE pid = 42").get().version, "1.2.0");
 });

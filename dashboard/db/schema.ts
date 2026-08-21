@@ -5,6 +5,7 @@ export const healthSamples = sqliteTable(
   "health_samples",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    sampleId: text("sample_id").unique(),
     receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     reportedAt: text("reported_at").notNull(),
     version: text("version").notNull(),
@@ -29,7 +30,10 @@ export const healthSamples = sqliteTable(
     chromeChecked: integer("chrome_checked", { mode: "boolean" }).notNull(),
     chromeRunning: integer("chrome_running", { mode: "boolean" }),
   },
-  (table) => [index("health_samples_received_at_idx").on(table.receivedAt)],
+  (table) => [
+    index("health_samples_received_at_idx").on(table.receivedAt),
+    index("health_samples_reported_at_idx").on(table.reportedAt),
+  ],
 );
 
 export const alertSettings = sqliteTable("alert_settings", {

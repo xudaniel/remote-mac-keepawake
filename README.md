@@ -205,6 +205,15 @@ address, serial number, location, or credentials. The production site uses its
 owner-only identity session for viewing; its ingest key and private-site
 automation token remain separate.
 
+Before each upload, the reporter atomically saves the sample in a mode-`0700`
+private outbox. Transient failures use bounded retries; samples that still
+cannot be delivered remain on disk and are replayed in observation-time order
+after connectivity returns. Each sample has a random idempotency ID, so an
+ambiguous retry cannot create duplicate history. `status` reports
+`pending_samples` and `last_success_at`. Uninstall removes credentials but
+preserves unsent samples for a later reinstall; a long outage can therefore
+grow local disk use until delivery resumes.
+
 `--internet-speed` uses Apple's built-in `networkQuality` on the remote Mac and
 automatically enables the basic network reachability check. The 60-second
 heartbeat reuses a cached result; a new speed test runs every 21,600 seconds
@@ -219,6 +228,8 @@ timestamps and state changes, export CSV, see estimated storage and uptime, and
 use an explicit confirmed deletion workflow. Retention remains subject to the
 hosting provider's capacity and project lifecycle. Speed measurements and their
 exact timestamps follow the same retention, export, and deletion lifecycle.
+Replayed samples retain the time they were observed on the Mac rather than the
+later time at which the network accepted them.
 
 Optional remote alerts deduplicate outage, battery, power, KeepAwake, network,
 and Chrome Remote Desktop transitions and record recoveries. A server-side
