@@ -301,9 +301,10 @@ send_heartbeat() {
   local speed_interval="0" speed_enabled="false" now_epoch=0 cache_epoch=0
   local current_path="" replayed=0 pending=0 accepted_at="" sample_id=""
   local -a health_args=()
-  [[ "$MAX_REPLAY_PER_RUN" =~ ^[0-9]+$ ]] &&
-    [[ "$MAX_REPLAY_PER_RUN" -ge 1 && "$MAX_REPLAY_PER_RUN" -le 500 ]] ||
+  if ! [[ "$MAX_REPLAY_PER_RUN" =~ ^[0-9]+$ ]] ||
+    [[ "$MAX_REPLAY_PER_RUN" -lt 1 || "$MAX_REPLAY_PER_RUN" -gt 500 ]]; then
     die "RMKA_DASH_MAX_REPLAY_PER_RUN must be between 1 and 500."
+  fi
   endpoint="$(read_config_line "$ENDPOINT_FILE")" || die "Heartbeat endpoint is not configured."
   token="$(read_config_line "$TOKEN_FILE")" || die "Ingest token is not configured."
   sites_token="$(read_config_line "$SITES_TOKEN_FILE")" || sites_token=""
