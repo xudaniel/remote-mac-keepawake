@@ -162,6 +162,43 @@ remote-mac-keepawake health --watch \
 通知和 webhook 都必须显式启用。Webhook 只接受 HTTPS，发送内容仅包括服务名、
 健康状态和安装模式，不包含主机名、用户名、PID、电量或任何密钥。
 
+## 可选远程面板：Mac Pulse
+
+`dashboard/` 提供适合手机查看的私密页面，实时显示心跳新鲜度、电量、充电与
+电源状态、合盖状态、launchd 服务、防睡眠 assertion、版本、远程连接诊断、
+提醒和包含本地准确时间的完整历史。
+
+如果面板只运行在被监控的 Mac 上，电脑睡眠后页面也会一起消失。Mac Pulse 会在
+用户显式启用后，把最小化心跳保存到电脑之外；连续 90 秒没有心跳时，面板会把
+电脑标记为离线。这可能表示睡眠、断电、断网、关机或其他故障，但面板不会假装
+能够判断具体原因。
+
+部署面板并取得私密上传密钥后：
+
+```bash
+read -rs MAC_PULSE_INGEST_TOKEN
+read -rs MAC_PULSE_SITES_TOKEN
+printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
+  ./bin/remote-mac-heartbeat install \
+  --url https://your-private-dashboard.example/api/heartbeat \
+  --token-stdin --sites-token-stdin --user
+unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
+./bin/remote-mac-heartbeat status
+```
+
+上报组件每 60 秒运行一次，不发送电脑名称、用户名、IP 地址、设备序列号、位置
+或密钥。生产站点使用仅限所有者的身份会话查看数据；上传密钥与私密站点自动
+访问令牌继续保持分离。
+
+已接收样本不会自动清理。所有者可以通过有范围限制、采用 cursor 分页的接口查看
+1 小时至全部历史或自定时间范围，检查本地准确时间与状态变化，导出 CSV，查看
+估算存储量和在线率，并通过显式确认流程删除历史。留存仍受托管商容量和项目
+生命周期限制。
+
+可选远程提醒会对离线、电池、电源、KeepAwake、网络和 Chrome Remote Desktop
+状态变化去重，并记录恢复事件。服务端 webhook 目标绝不会进入心跳数据。可靠的
+离线提醒需要外部定时器，因为离线 Mac 无法自行报告故障。
+
 ## 重启和登出恢复检查
 
 在有人能够恢复电脑的前提下，重启前运行：

@@ -166,6 +166,48 @@ Notifications and webhooks are opt-in. The webhook requires HTTPS and receives
 only the service name, health state, and install mode. It does not receive the
 hostname, username, PID, battery level, or secrets.
 
+## Optional remote dashboard: Mac Pulse
+
+The `dashboard/` app adds a private, mobile-friendly view of heartbeat
+freshness, battery level, charging and power state, lid state, launchd service,
+idle-sleep protection, version, remote-access diagnostics, alerts, and complete
+retained history with exact local timestamps.
+
+Unlike a dashboard running only on the Mac, Mac Pulse stores a minimal opt-in
+heartbeat outside the device. If no heartbeat arrives for 90 seconds, the
+dashboard marks the Mac offline. This can indicate sleep, lost power, lost
+network, shutdown, or another failure; it does not claim to identify which one.
+
+After deploying the dashboard and receiving its private ingest token:
+
+```bash
+read -rs MAC_PULSE_INGEST_TOKEN
+read -rs MAC_PULSE_SITES_TOKEN
+printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
+  ./bin/remote-mac-heartbeat install \
+  --url https://your-private-dashboard.example/api/heartbeat \
+  --token-stdin --sites-token-stdin --user
+unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
+./bin/remote-mac-heartbeat status
+```
+
+The reporter runs every 60 seconds. It does not send hostname, username, IP
+address, serial number, location, or credentials. The production site uses its
+owner-only identity session for viewing; its ingest key and private-site
+automation token remain separate.
+
+Accepted samples are not automatically pruned. The owner can browse bounded,
+cursor-paginated 1-hour through all-time or custom ranges, inspect exact local
+timestamps and state changes, export CSV, see estimated storage and uptime, and
+use an explicit confirmed deletion workflow. Retention remains subject to the
+hosting provider's capacity and project lifecycle.
+
+Optional remote alerts deduplicate outage, battery, power, KeepAwake, network,
+and Chrome Remote Desktop transitions and record recoveries. A server-side
+webhook destination is never included in the heartbeat. Reliable offline
+alerts require an external scheduler because an offline Mac cannot report its
+own outage.
+
 ## Reboot and logout recovery
 
 Before a supervised reboot:

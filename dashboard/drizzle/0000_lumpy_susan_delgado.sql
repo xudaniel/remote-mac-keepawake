@@ -1,0 +1,20 @@
+CREATE TABLE `health_samples` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`received_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	`reported_at` text NOT NULL,
+	`version` text NOT NULL,
+	`health` text NOT NULL,
+	`mode` text NOT NULL,
+	`installed` integer NOT NULL,
+	`service_state` text NOT NULL,
+	`pid` integer,
+	`idle_sleep_prevented` integer NOT NULL,
+	`power_source` text NOT NULL,
+	`battery_percent` integer,
+	`charging` integer,
+	`lid_closed` integer,
+	`network_checked` integer NOT NULL,
+	`network_available` integer,
+	`chrome_checked` integer NOT NULL,
+	`chrome_running` integer
+);

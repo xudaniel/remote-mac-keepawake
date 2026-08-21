@@ -240,6 +240,26 @@ Failure outcome: the working user installation remains active.
   language counterpart.
 - Release archives must contain all four documents.
 
+### FR-10: optional Mac Pulse dashboard
+
+- Production viewing must use the owner-only site identity; ingest authorization
+  must remain separate and fail closed.
+- The first viewport must combine connection likelihood, exact local heartbeat
+  time and age, next expected check-in, battery, charging, power, and primary
+  risk without claiming a guaranteed root cause.
+- Accepted heartbeat samples must not be automatically pruned. History APIs
+  must use bounded time ranges and cursor pagination, with owner-only CSV export
+  and an explicit irreversible deletion confirmation.
+- The dashboard must expose checked, passed, failed, and unknown states for
+  KeepAwake, power, network, and Chrome Remote Desktop, plus safe recovery
+  guidance and a copyable secret-free summary.
+- Optional alerts must deduplicate active states, record distinct recoveries,
+  keep destinations out of heartbeat data and Git, and send only a minimal
+  event payload.
+- The mobile dashboard must reflow at 320 CSS pixels, use visible keyboard
+  focus, readable bilingual labels, semantic landmarks, live status
+  announcements, and 44 CSS pixel primary controls.
+
 ## 8. CLI contract
 
 | Command | Purpose | Mutates state | Privilege |
@@ -301,8 +321,10 @@ launchd
     +-- supervises /usr/bin/caffeinate -i
 ```
 
-There is no project-owned daemon binary, network server, database, privileged
-helper, browser extension, or cloud control plane.
+The core CLI has no project-owned daemon binary, network server, database,
+privileged helper, browser extension, or required cloud control plane. Mac
+Pulse is a separate, optional, owner-authorized dashboard with an external D1
+heartbeat store; the CLI remains fully usable without it.
 
 ## 11. Privacy and security requirements
 
@@ -316,6 +338,10 @@ helper, browser extension, or cloud control plane.
 - Documentation must tell users to treat webhook URLs as secrets.
 - CI actions must be pinned to reviewed commit SHAs.
 - Release consumers must be given checksum verification instructions.
+- Mac Pulse must never store or transmit hostname, username, IP address, serial
+  number, location, webhook destination, or credentials in a heartbeat.
+- Mac Pulse webhook payloads must contain only product, alert kind, state,
+  severity, and occurrence time.
 
 ## 12. Reliability and failure handling
 
