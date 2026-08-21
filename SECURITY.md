@@ -23,6 +23,9 @@ other private machine data in a public issue.
   install mode. Treat webhook URLs as secrets and do not commit them.
 - Release archives include SHA-256 checksums; CI action references are pinned
   to reviewed commit SHAs.
+- Releases include an SPDX software bill of materials and GitHub artifact
+  provenance attestations. Verify them with `gh attestation verify` against
+  this repository after validating `SHA256SUMS`.
 
 This project cannot protect against physical access, power or network loss,
 FileVault pre-boot lock, operating-system compromise, or hardware failure.

@@ -4,6 +4,8 @@ All notable changes follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-21
+
 ### Added
 
 - Mac Pulse, an optional bilingual remote monitoring dashboard with protected
@@ -14,6 +16,13 @@ All notable changes follow semantic versioning.
   latency, responsiveness, exact measurement timestamps, retained history, and
   CSV export. Apple `networkQuality` runs no more often than every 30 minutes
   and defaults to every 6 hours to limit bandwidth impact.
+
+### Changed
+
+- CI now validates both Bash executables, all shell suites, the dashboard
+  build and lint, and additive D1 migrations without duplicate branch runs.
+- Release archives now align CLI, heartbeat, and dashboard versions and
+  include the complete dashboard source and migrations.
 
 ## [1.2.0] - 2026-08-20
 

@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Product version | 1.2.0 |
+| Product version | 1.3.0 |
 | Document status | Release baseline |
 | Owner | Daniel Xu |
-| Last updated | 2026-08-20 |
+| Last updated | 2026-08-21 |
 | Platforms | macOS 14, 15, and 26 |
 | License | MIT |
 
@@ -19,9 +19,10 @@ available for remote administration by running macOS's built-in
 critical reliability defect: mutating commands report success only after the
 service state, managed PID, and active idle-sleep assertion are verified.
 
-Version 1.2.0 establishes the product and documentation baseline in English
-and Simplified Chinese. It does not expand the physical capabilities of the
-Mac. Power, networking, lid behavior, hardware, operating-system failures, and
+Version 1.3.0 adds the optional Mac Pulse remote dashboard, complete retained
+history with exact timestamps, privacy-preserving alerts, and opt-in internet
+speed measurements. It does not expand the physical capabilities of the Mac.
+Power, networking, lid behavior, hardware, operating-system failures, and
 FileVault pre-boot unlock remain outside the product boundary.
 
 ## 2. Problem statement
@@ -399,32 +400,36 @@ CI evidence:
 - English and Chinese document versions remain aligned;
 - release checksum validates the downloadable archive.
 
-## 14. v1.2.0 acceptance criteria
+## 14. v1.3.0 acceptance criteria
 
-- [ ] CLI reports `remote-mac-keepawake 1.2.0`.
+- [ ] KeepAwake and heartbeat CLIs report version `1.3.0`.
+- [ ] Dashboard package reports version `1.3.0`.
 - [ ] Reliability suite passes on supported macOS runners.
 - [ ] ShellCheck reports no findings.
 - [ ] Real launchd restart integration passes.
+- [ ] Heartbeat install, send, speed-cache, status, and uninstall tests pass.
+- [ ] Dashboard lint, build, route tests, and additive migration tests pass.
 - [ ] English and Chinese README files are complete and cross-linked.
 - [ ] English and Chinese PRDs are complete and cross-linked.
 - [ ] Documentation test confirms version and archive alignment.
 - [ ] Main branch CI passes after merge.
-- [ ] Tag `v1.2.0` points to the reviewed main commit.
+- [ ] Tag `v1.3.0` points to the reviewed main commit.
 - [ ] GitHub release contains source archives, project archive, and
   `SHA256SUMS`.
 - [ ] Downloaded project archive passes SHA-256 verification and contains both
-  README files and both PRDs.
+  CLIs, dashboard source and migrations, both README files, and both PRDs.
 
 ## 15. Release process
 
-1. Update CLI version, changelog, bilingual README files, and bilingual PRDs.
-2. Run Bash syntax, ShellCheck, reliability, documentation, YAML, and mode
-   checks locally.
+1. Align CLI, heartbeat, dashboard, changelog, bilingual README, and PRD
+   versions.
+2. Run Bash syntax, ShellCheck, reliability, heartbeat, dashboard, migration,
+   documentation, YAML, and mode checks locally.
 3. Publish a feature branch and pull request.
 4. Require green hosted CI and no unresolved review threads.
 5. Merge the exact reviewed head to main.
 6. Require green post-merge main CI.
-7. Create tag `v1.2.0` on the exact main commit.
+7. Create tag `v1.3.0` on the exact main commit.
 8. Verify release workflow success, asset names, archive content, and checksum.
 
 ## 16. Risks and mitigations
@@ -440,16 +445,16 @@ CI evidence:
 | Documentation drifts across languages | Run a version/link/archive documentation test in CI |
 | Release loses executable bit | Build archive with explicit `install -m 0755` |
 
-## 17. Roadmap after v1.2.0
+## 17. Roadmap after v1.3.0
 
 Potential future work, subject to separate review:
 
 - signed or notarized distribution without adding a privileged helper;
-- opt-in local launchd scheduling for health watch mode;
 - configurable network probe endpoint with strict privacy documentation;
 - machine-readable command schema documentation;
 - automated bilingual terminology checks;
-- an operator runbook for multiple remote Macs without centralized telemetry.
+- an operator runbook for multiple remote Macs without centralized telemetry;
+- signed release provenance and a software bill of materials.
 
 These items are not commitments and must not weaken the local-first,
 fail-closed safety model.

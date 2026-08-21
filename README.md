@@ -1,11 +1,19 @@
 # Remote Mac KeepAwake
 
 [![CI](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml/badge.svg)](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/xudaniel/remote-mac-keepawake)](https://github.com/xudaniel/remote-mac-keepawake/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-70eabb.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-14%20%7C%2015%20%7C%2026-f1faf6.svg)](#supported-systems-and-ci)
 
 [English](README.md) | [简体中文](README.zh-CN.md)  
 [English PRD](docs/PRD.en.md) | [中文 PRD](docs/PRD.zh-CN.md)
 
-Current release: v1.2.0
+Current release: v1.3.0
+
+![Mac Pulse synthetic dashboard preview](docs/assets/mac-pulse-synthetic.svg)
+
+The preview uses synthetic values only. See the
+[architecture and trust boundaries](docs/ARCHITECTURE.md).
 
 Remote Mac KeepAwake runs macOS's built-in `caffeinate -i` as a verified,
 launchd-managed service. It prevents idle system sleep, restarts automatically,
@@ -283,18 +291,21 @@ Every semantic-version tag publishes:
 - generated GitHub release notes;
 - GitHub source archives;
 - a mode-preserving project archive;
-- `SHA256SUMS`.
+- an SPDX software bill of materials;
+- `SHA256SUMS` and GitHub artifact provenance attestations.
 
-Verify a downloaded v1.2.0 archive:
+Verify a downloaded v1.3.0 archive:
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-tar -tzf remote-mac-keepawake-v1.2.0.tar.gz
+tar -tzf remote-mac-keepawake-v1.3.0.tar.gz
+gh attestation verify remote-mac-keepawake-v1.3.0.tar.gz \
+  --repo xudaniel/remote-mac-keepawake
 ```
 
-The archive includes this English README, the
-[Chinese README](README.zh-CN.md), the [English PRD](docs/PRD.en.md), and the
-[Chinese PRD](docs/PRD.zh-CN.md).
+The archive includes both CLIs, Mac Pulse dashboard source and migrations,
+this English README, the [Chinese README](README.zh-CN.md), the
+[English PRD](docs/PRD.en.md), and the [Chinese PRD](docs/PRD.zh-CN.md).
 
 ## Supported systems and CI
 
@@ -308,6 +319,8 @@ CI verifies:
 - rollback and cleanup boundaries;
 - valid JSON and plist output;
 - executable modes;
+- heartbeat reporter installation, sending, speed caching, and cleanup;
+- dashboard lint, build, route behavior, and additive D1 migrations;
 - bilingual documentation and release metadata;
 - a real LaunchAgent restart with a restored `pmset` assertion.
 
@@ -324,6 +337,8 @@ and roadmap are maintained in:
 ```bash
 ./tests/test.sh
 ./tests/docs-test.sh
+./tests/heartbeat-test.sh
+(cd dashboard && npm ci && npm run lint && npm test)
 ./.github/tests/launchd-integration.sh
 ```
 

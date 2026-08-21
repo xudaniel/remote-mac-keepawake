@@ -48,7 +48,7 @@ assert_file "$config/sites-bypass-token"
 assert_file "$plist"
 assert_mode "$config" 700
 assert_mode "$config/ingest-token" 600
-"$ROOT/bin/remote-mac-heartbeat" version | /usr/bin/grep -q '1.1.0' || fail "Version failed"
+"$ROOT/bin/remote-mac-heartbeat" version | /usr/bin/grep -q '1.3.0' || fail "Version failed"
 
 RMKA_DASH_TEST_ROOT="$TEST_AREA" RMKA_DASH_ALLOW_HTTP=1 \
 RMKA_DASH_CLI="$TEST_AREA/bin/health" RMKA_DASH_CURL="$TEST_AREA/bin/curl" \

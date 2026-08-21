@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://github.com/xudaniel/remote-mac-keepawake/security/advisories/new
+    about: Report vulnerabilities and any finding that may contain sensitive machine data privately.
+  - name: Operator documentation
+    url: https://github.com/xudaniel/remote-mac-keepawake#readme
+    about: Review installation, recovery, and product limitations before opening an issue.

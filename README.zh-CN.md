@@ -1,11 +1,19 @@
 # Remote Mac KeepAwake
 
 [![CI](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml/badge.svg)](https://github.com/xudaniel/remote-mac-keepawake/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/xudaniel/remote-mac-keepawake)](https://github.com/xudaniel/remote-mac-keepawake/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-70eabb.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-14%20%7C%2015%20%7C%2026-f1faf6.svg)](#支持系统与-ci)
 
 [English](README.md) | [简体中文](README.zh-CN.md)  
 [英文 PRD](docs/PRD.en.md) | [中文 PRD](docs/PRD.zh-CN.md)
 
-当前版本：v1.2.0
+当前版本：v1.3.0
+
+![Mac Pulse 合成数据面板预览](docs/assets/mac-pulse-synthetic.svg)
+
+预览图只使用合成数据。架构与信任边界见
+[架构说明](docs/ARCHITECTURE.zh-CN.md)。
 
 Remote Mac KeepAwake 使用 macOS 自带的 `caffeinate -i`，并交给
 `launchd` 持续管理。它可以防止电脑因为闲置而进入系统睡眠，在进程退出后
@@ -270,17 +278,21 @@ sudo remote-mac-keepawake uninstall --system
 - 自动生成的 GitHub release notes；
 - GitHub 源码压缩包；
 - 保留可执行权限的项目归档；
-- `SHA256SUMS`。
+- SPDX 软件物料清单；
+- `SHA256SUMS` 和 GitHub artifact provenance attestations。
 
-校验 v1.2.0 下载文件：
+校验 v1.3.0 下载文件：
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-tar -tzf remote-mac-keepawake-v1.2.0.tar.gz
+tar -tzf remote-mac-keepawake-v1.3.0.tar.gz
+gh attestation verify remote-mac-keepawake-v1.3.0.tar.gz \
+  --repo xudaniel/remote-mac-keepawake
 ```
 
-项目归档包括本中文 README、[英文 README](README.md)、
-[英文 PRD](docs/PRD.en.md) 和 [中文 PRD](docs/PRD.zh-CN.md)。
+项目归档包括两个 CLI、Mac Pulse Dashboard 源码与 migrations、本中文 README、
+[英文 README](README.md)、[英文 PRD](docs/PRD.en.md) 和
+[中文 PRD](docs/PRD.zh-CN.md)。
 
 ## 支持系统与 CI
 
@@ -294,6 +306,8 @@ CI 检查：
 - 回滚和清理边界；
 - JSON 与 plist 有效性；
 - 可执行权限；
+- Heartbeat reporter 安装、上报、测速缓存和清理；
+- Dashboard lint、构建、路由行为和增量 D1 migrations；
 - 中英文文档与 release 元数据一致性；
 - 真实 LaunchAgent 重启以及恢复后的 `pmset` assertion。
 
@@ -309,6 +323,8 @@ CI 检查：
 ```bash
 ./tests/test.sh
 ./tests/docs-test.sh
+./tests/heartbeat-test.sh
+(cd dashboard && npm ci && npm run lint && npm test)
 ./.github/tests/launchd-integration.sh
 ```
 
