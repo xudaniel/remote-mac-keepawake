@@ -2,17 +2,48 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Test on macOS
-    runs-on: macos-latest
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-24.04
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Run tests
-        run: bash ./tests/test.sh
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint Bash
+        run: shellcheck bin/remote-mac-keepawake tests/test.sh .github/tests/launchd-integration.sh
+
+  test:
+    name: Unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify executable modes
+        run: test -x bin/remote-mac-keepawake && test -x tests/test.sh
+      - name: Check Bash syntax
+        run: bash -n bin/remote-mac-keepawake tests/test.sh .github/tests/launchd-integration.sh
+      - name: Run reliability suite
+        run: ./tests/test.sh
+
+  launchd-integration:
+    name: launchd restart and assertion integration
+    runs-on: macos-15
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Exercise a real user LaunchAgent
+        run: ./.github/tests/launchd-integration.sh

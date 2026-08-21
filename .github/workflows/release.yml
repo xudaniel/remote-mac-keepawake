@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Verify and publish
+    runs-on: macos-15
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Verify tag and tests
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          declared="$(awk -F'"' '/readonly VERSION=/{print $2; exit}' bin/remote-mac-keepawake)"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$declared" == "$version" ]]
+          bash -n bin/remote-mac-keepawake tests/test.sh
+          ./tests/test.sh
+          test -x bin/remote-mac-keepawake
+      - name: Build mode-preserving release archive and checksum
+        shell: bash
+        run: |
+          package="remote-mac-keepawake-$GITHUB_REF_NAME"
+          mkdir -p "dist/$package/bin"
+          install -m 0755 bin/remote-mac-keepawake "dist/$package/bin/"
+          install -m 0644 README.md CHANGELOG.md SECURITY.md LICENSE "dist/$package/"
+          tar -czf "dist/$package.tar.gz" -C dist "$package"
+          cd dist
+          shasum -a 256 "$package.tar.gz" > SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dist/*.tar.gz dist/SHA256SUMS
+          --verify-tag
+          --generate-notes
+          --title "$GITHUB_REF_NAME"
