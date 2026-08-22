@@ -82,6 +82,8 @@ h2 { margin-bottom: 0; font-size: clamp(22px, 3vw, 31px); letter-spacing: -.035e
 .metric-card { min-height: 178px; padding: 22px; border-radius: 17px; }
 .metric-featured { background: linear-gradient(145deg, rgba(29, 72, 59, .9), rgba(15, 31, 28, .88)); }
 .metric-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 32px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.data-kind { margin-left: auto; padding: 4px 7px; border: 1px solid rgba(255, 194, 127, .3); border-radius: 999px; color: var(--amber); background: rgba(255, 194, 127, .07); font-size: 8px; font-style: normal; letter-spacing: .08em; white-space: nowrap; }
+.data-kind.live { border-color: var(--line-bright); color: var(--green); background: rgba(112, 234, 187, .08); }
 .metric-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: var(--green); background: rgba(112, 234, 187, .09); }
 .metric-value { display: block; margin-bottom: 8px; font-size: 28px; letter-spacing: -.04em; }
 .metric-value.good { color: var(--green); }

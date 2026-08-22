@@ -17,7 +17,8 @@ also read an operator-authorized Mac Pulse API without committing a token or
 putting one in the URL. Viewer credentials stay in the browser tab's
 `sessionStorage`; the heartbeat ingest/signing key must never be entered there.
 The private dashboard must explicitly allow `https://xudaniel.github.io` as
-`PUBLIC_VIEWER_ORIGIN` before connected mode can work.
+`PUBLIC_VIEWER_ORIGIN` before connected mode can work. Connected data refreshes
+once per minute, matching the reporter's heartbeat cadence.
 
 ![Mac Pulse synthetic dashboard preview](docs/assets/mac-pulse-synthetic.svg)
 

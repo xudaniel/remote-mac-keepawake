@@ -1,7 +1,7 @@
 "use strict";
 
 const SESSION_KEY = "mac-pulse-private-connection-v1";
-const REFRESH_INTERVAL_MS = 10_000;
+const REFRESH_INTERVAL_MS = 60_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 const translations = {
@@ -52,9 +52,11 @@ const translations = {
     publicDemo: "Public demo",
     demoCopy: "All Mac readings shown here are synthetic.",
     privateLive: "Private live data",
-    privateCopy: "Refreshing your authorized Mac Pulse endpoint every 10 seconds.",
+    privateCopy: "Refreshing your authorized Mac Pulse endpoint every 60 seconds.",
     connectionProblem: "Connection problem",
     connectionProblemCopy: "Private data could not be refreshed. Check the endpoint, CORS setting and tokens.",
+    syntheticData: "Synthetic data",
+    liveData: "Live data",
     demoRefreshed: "Demo refreshed",
     liveSynced: "Private API synced",
     awakeProtected: "Awake & protected",
@@ -139,9 +141,11 @@ const translations = {
     publicDemo: "公开演示",
     demoCopy: "此页面显示的所有 Mac 读数均为合成数据。",
     privateLive: "私有实时数据",
-    privateCopy: "每 10 秒刷新一次已授权的 Mac Pulse 端点。",
+    privateCopy: "每 60 秒刷新一次已授权的 Mac Pulse 端点。",
     connectionProblem: "连接异常",
     connectionProblemCopy: "无法刷新私有数据，请检查端点、CORS 设置及密钥。",
+    syntheticData: "合成数据",
+    liveData: "实时数据",
     demoRefreshed: "演示刷新",
     liveSynced: "私有 API 已同步",
     awakeProtected: "已唤醒并受保护",
@@ -352,6 +356,8 @@ function render(payload) {
   const { status, history } = payload;
   const latest = status.latest || {};
   const modeIsPrivate = payload.mode === "private";
+  setText("battery-data-kind", tr(modeIsPrivate ? "liveData" : "syntheticData"));
+  byId("battery-data-kind").classList.toggle("live", modeIsPrivate);
   const overallKey = status.overall === "healthy" ? "awakeProtected" : status.overall === "unprotected" ? "unprotected" : status.overall === "stale" ? "stale" : "offline";
   const awake = Boolean(status.online && status.awake);
   setText("overall-state", tr(overallKey));

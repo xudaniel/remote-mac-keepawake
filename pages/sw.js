@@ -1,4 +1,4 @@
-const CACHE_NAME = "mac-pulse-pages-v1";
+const CACHE_NAME = "mac-pulse-pages-v2";
 const STATIC_ASSETS = ["./", "./index.html", "./app.css", "./app.js", "./icon.svg", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
