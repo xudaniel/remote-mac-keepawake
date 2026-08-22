@@ -10,6 +10,15 @@
 
 Current release: v1.4.0
 
+**[Open the live Mac Pulse app](https://xudaniel.github.io/remote-mac-keepawake/)**
+
+The GitHub Pages app opens in a clearly labelled synthetic demo mode. It can
+also read an operator-authorized Mac Pulse API without committing a token or
+putting one in the URL. Viewer credentials stay in the browser tab's
+`sessionStorage`; the heartbeat ingest/signing key must never be entered there.
+The private dashboard must explicitly allow `https://xudaniel.github.io` as
+`PUBLIC_VIEWER_ORIGIN` before connected mode can work.
+
 ![Mac Pulse synthetic dashboard preview](docs/assets/mac-pulse-synthetic.svg)
 
 The preview uses synthetic values only. See the

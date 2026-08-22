@@ -290,6 +290,14 @@ Failure outcome: the working user installation remains active.
 - The mobile dashboard must reflow at 320 CSS pixels, use visible keyboard
   focus, readable bilingual labels, semantic landmarks, live status
   announcements, and 44 CSS pixel primary controls.
+- A public GitHub Pages viewer must default to conspicuously labelled synthetic
+  data. Optional private mode may read status and history only after the
+  operator enters a separate viewer credential in a trusted browser.
+- The static viewer must not use analytics or third-party runtime assets, put
+  credentials in URLs or persistent storage, or accept the heartbeat
+  ingest/signing key. Cross-origin access must fail closed unless the dashboard
+  configures the exact viewer origin, and it must not permit cross-origin
+  mutation.
 
 ## 8. CLI contract
 

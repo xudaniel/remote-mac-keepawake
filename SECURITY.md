@@ -27,6 +27,12 @@ other private machine data in a public issue.
   migration compatibility path, not the production default.
 - Reporter credentials and caches use mode-`0600` files in a mode-`0700`
   directory. Status output and logs never print signing tokens.
+- The GitHub Pages viewer is public code and starts with synthetic data. Its
+  optional private connection stores viewer credentials only in per-tab
+  `sessionStorage`, sends them only to an operator-entered HTTPS origin, and
+  never accepts the heartbeat ingest/signing key. The dashboard enables
+  cross-origin reads only for the exact `PUBLIC_VIEWER_ORIGIN`; cross-origin
+  mutation remains blocked.
 - Webhooks require HTTPS and receive only the service name, health state, and
   install mode. Treat webhook URLs as secrets and do not commit them.
 - `upgrade --release` requires HTTPS, validates the selected archive against
