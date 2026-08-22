@@ -4,6 +4,40 @@ All notable changes follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-22
+
+### Added
+
+- HMAC-SHA-256 heartbeat signing with key IDs, replay protection, authentication
+  rate limiting, and current/next/previous key-rotation slots.
+- Autonomous one-minute offline monitoring with a D1 execution lease,
+  persistent bounded retries, fallback webhook delivery, and an optional
+  scheduler canary.
+- Read-only battery condition, cycle count, design/full-charge capacity,
+  estimated battery health, and macOS thermal-pressure history.
+- Opt-in cached network diagnostics for local route, gateway, DNS, public HTTPS,
+  dashboard ingest, latency, jitter, packet loss, fault category, and exact
+  measurement time without retaining network identifiers.
+- A verified `upgrade --release latest|VERSION` workflow with checksum and
+  archive-path validation, coordinated KeepAwake/reporter rollback, and explicit
+  downgrade protection.
+
+### Changed
+
+- Alert history now exposes delivery attempts, target, retry schedule, final
+  delivery time, and scheduler health in the bilingual dashboard.
+- History and CSV export retain the new hardware and network fields for the same
+  owner-controlled lifetime as existing heartbeat samples.
+- Release archives now include bilingual architecture and version-specific
+  release notes in addition to both CLIs, PRDs, and the full dashboard source.
+
+### Security
+
+- Production heartbeat ingestion fails closed on missing or invalid signatures
+  unless a time-bounded legacy-bearer migration flag is explicitly enabled.
+- Signing tokens, key IDs, caches, and diagnostic configuration remain in
+  mode-`0600` files inside a mode-`0700` directory.
+
 ## [1.3.0] - 2026-08-21
 
 ### Added

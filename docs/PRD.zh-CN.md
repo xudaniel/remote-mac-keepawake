@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 产品版本 | 1.3.0 |
+| 产品版本 | 1.4.0 |
 | 文档状态 | Release 基线 |
 | 负责人 | Daniel Xu |
-| 最后更新 | 2026-08-21 |
+| 最后更新 | 2026-08-22 |
 | 支持平台 | macOS 14、15、26 |
 | 许可证 | MIT |
 
@@ -20,8 +20,8 @@ Remote Mac KeepAwake 是一款本地优先的命令行工具。它把 macOS 自�
 产品把“假成功”视为严重可靠性缺陷：任何会改变状态的命令，只有在服务状态、
 受管 PID 和有效的闲置防睡眠 assertion 全部验证成功后，才可以显示成功。
 
-v1.3.0 新增可选的 Mac Pulse 远程面板、包含准确时间戳的完整历史、隐私保护
-提醒和显式启用的网速测量。它不会扩展 Mac 的物理能力；电源、网络、合盖、
+v1.4.0 使用可轮换签名心跳、自主重试提醒、电池健康与温控历史、隐私保护网络
+故障定位和 checksum 校验升级来强化 Mac Pulse。它不会扩展 Mac 的物理能力；电源、网络、合盖、
 硬件、操作系统故障和 FileVault 启动前解锁均不属于产品能够控制的范围。
 
 ## 2. 问题定义
@@ -183,6 +183,8 @@ Mac。
 - `health --json` 必须遵守第 9 节 schema；
 - 健康退出码固定为：0 healthy、1 unavailable、2 degraded；
 - 格式错误的传感器输出必须规范为 `null`，不能破坏 JSON。
+- 电池状况、循环次数、设计容量、满充容量、容量估算健康度和温控压力必须只读
+  采集；无法读取的值必须规范为 `null`。
 
 ### FR-6：可选监测
 
@@ -207,6 +209,9 @@ Mac。
 - 替换必须原子且可回滚；
 - Git 和 release 归档必须保留可执行权限；
 - release assets 必须包含 SHA-256 校验文件。
+- `upgrade --release` 只能通过 HTTPS 下载；checksum 校验或归档安全路径检查失败时
+  必须拒绝，默认拒绝降级，替换后必须健康检查，失败时恢复旧 CLI；不得后台自动
+  更新。
 
 ### FR-9：文档与本地化
 
@@ -219,6 +224,9 @@ Mac。
 ### FR-10：可选 Mac Pulse 面板
 
 - 生产环境查看必须使用仅限所有者的站点身份；上传授权必须保持分离并默认拒绝；
+- 每个生产心跳必须使用 HMAC-SHA-256 签名，并绑定 key ID、传输时间、样本 ID、
+  请求路径和正文；服务端必须强制五分钟防重放，在不保存来源 IP 的前提下限制
+  失败，并支持有限的 current/next/previous 密钥轮换；
 - 首屏必须同时显示连接可能性、本地准确心跳时间与年龄、预计下次心跳、电量、
   充电、电源和主要风险，不得把推测写成确定原因；
 - 已接收心跳不得自动清理。历史接口必须采用有界时间范围和 cursor 分页，并提供
@@ -233,6 +241,12 @@ Mac。
   6 小时，并拒绝低于 30 分钟的间隔；
 - 可选提醒必须对持续异常去重，单独记录恢复事件，不得把通知目标写入心跳或 Git，
   并且只能发送最小化事件 payload；
+- 每分钟 Worker schedule 必须在 D1 租约下检查离线状态；发送次数、有限退避、
+  最终目标和最终成功时间必须持久化；备用 Webhook 与 scheduler canary 可选；
+- 可选网络诊断必须区分本地路由/网关、DNS、公共 HTTPS 和 Dashboard ingest 故障，
+  按可配置缓存周期记录网关延迟、抖动、丢包和准确时间，绝不保存网关、DNS、
+  SSID、公网 IP 或 endpoint 标识；
+- HTTPS 探测端点必须可由运维者配置，使用严格超时和较低进程优先级；
 - 手机面板必须能在 320 CSS 像素下重排，提供清晰键盘焦点、可读双语标签、语义
   landmark、实时状态播报和至少 44 CSS 像素的主要控制项。
 
@@ -268,6 +282,12 @@ Mac。
 | `idle_sleep_prevented` | boolean | 是否存在对应 assertion |
 | `power_source` | string | pmset 电源来源 |
 | `battery_percent` | number 或 null | 规范化电量百分比 |
+| `battery_condition` | string 或 null | 规范化 Apple 电池状况 |
+| `battery_cycle_count` | number 或 null | 只读循环次数 |
+| `battery_design_capacity_mah` | number 或 null | 设计容量 |
+| `battery_full_charge_capacity_mah` | number 或 null | 当前满充容量 |
+| `battery_health_percent` | number 或 null | 满充/设计容量估算值 |
+| `thermal_state` | string 或 null | 规范化 macOS 温控压力状态 |
 | `charging` | boolean 或 null | 规范化充电状态 |
 | `lid_closed` | boolean 或 null | 规范化合盖状态 |
 | `network_checked` | number | 只有显式请求时为 1 |
@@ -288,6 +308,17 @@ Schema 不得包含主机名、用户名、设备序列号、IP 地址、webhook
 | `internet_latency_ms` | number 或 null | 空闲往返延迟 |
 | `internet_responsiveness_rpm` | number 或 null | 每分钟往返次数，越高越好 |
 | `internet_speed_measured_at` | string 或 null | 缓存测速结果的 UTC ISO-8601 时间 |
+| `network_diagnostics_enabled` | boolean | reporter 是否显式启用诊断 |
+| `network_route_available` | boolean 或 null | 默认路由结果 |
+| `network_gateway_reachable` | boolean 或 null | 网关探测结果 |
+| `network_dns_available` | boolean 或 null | DNS 解析结果 |
+| `network_https_available` | boolean 或 null | 公共 HTTPS 结果 |
+| `network_ingest_reachable` | boolean 或 null | Dashboard ingest 可达性 |
+| `network_gateway_latency_ms` | number 或 null | 网关平均延迟 |
+| `network_gateway_jitter_ms` | number 或 null | 网关抖动 |
+| `network_gateway_packet_loss_percent` | number 或 null | 网关丢包率 |
+| `network_fault` | string | 规范化故障类别 |
+| `network_diagnostics_measured_at` | string 或 null | 准确 UTC 测量时间 |
 
 ## 10. 架构
 
@@ -360,20 +391,24 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 - 英文和中文文档版本保持一致；
 - 下载归档的 checksum 验证成功。
 
-## 14. v1.3.0 验收标准
+## 14. v1.4.0 验收标准
 
-- [ ] KeepAwake 与 heartbeat CLI 均输出版本 `1.3.0`；
-- [ ] Dashboard package 输出版本 `1.3.0`；
+- [ ] KeepAwake 与 heartbeat CLI 均输出版本 `1.4.0`；
+- [ ] Dashboard package 输出版本 `1.4.0`；
 - [ ] 可靠性测试在所有支持的 macOS runner 上通过；
 - [ ] ShellCheck 零问题；
 - [ ] 真实 launchd 重启集成测试通过；
 - [ ] Heartbeat 安装、上报、测速缓存、状态和卸载测试通过；
+- [ ] Heartbeat 签名、防重放、轮换、网络诊断和凭据权限测试通过；
+- [ ] 自主 scheduler 租约、持久重试、fallback 和 canary 测试通过；
+- [ ] 电池健康与温控解析保持只读，并能安全处理错误输入；
+- [ ] Release 升级能拒绝 checksum 篡改和未明确允许的降级；
 - [ ] Dashboard lint、构建、路由测试和增量 migration 测试通过；
 - [ ] 英文和中文 README 完整且互相链接；
 - [ ] 英文和中文 PRD 完整且互相链接；
 - [ ] 文档测试确认版本与归档内容一致；
 - [ ] 合并后 main CI 通过；
-- [ ] tag `v1.3.0` 指向已审核的 main commit；
+- [ ] tag `v1.4.0` 指向已审核的 main commit；
 - [ ] GitHub release 包含源码包、项目归档和 `SHA256SUMS`；
 - [ ] 下载后的项目归档通过 SHA-256 校验，并包含两个 CLI、Dashboard 源码与
   migrations、两份 README 和两份 PRD。
@@ -387,7 +422,7 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 4. 要求托管 CI 全绿且没有未解决 review thread；
 5. 把准确的已审核 head 合并到 main；
 6. 要求合并后的 main CI 全绿；
-7. 在准确 main commit 上创建 tag `v1.3.0`；
+7. 在准确 main commit 上创建 tag `v1.4.0`；
 8. 验证 release workflow、asset 名称、归档内容和 checksum。
 
 ## 16. 风险与缓解措施
@@ -403,12 +438,12 @@ D1 保存心跳；即使不启用 Mac Pulse，CLI 仍可完整使用。
 | 双语文档发生漂移 | CI 执行版本、链接和归档文档测试 |
 | release 丢失可执行位 | 用 `install -m 0755` 明确构建归档 |
 
-## 17. v1.3.0 之后的路线图
+## 17. v1.4.0 之后的路线图
 
 以下方向需要另行评审，不代表承诺：
 
 - 在不增加特权 helper 的前提下提供签名或 notarized 分发；
-- 支持自定义网络探测 endpoint，并提供严格隐私说明；
+- 为每种告警提供商进行外部验证的可控离线演练；
 - 提供机器可读的命令 schema；
 - 自动检查中英文术语一致性；
 - 为多台远程 Mac 提供不依赖集中遥测的运维手册；

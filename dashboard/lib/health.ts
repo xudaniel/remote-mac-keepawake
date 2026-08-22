@@ -10,6 +10,12 @@ export type IncomingHealth = {
   idle_sleep_prevented: boolean;
   power_source: string;
   battery_percent: number | null;
+  battery_condition: "normal" | "service-recommended" | "unknown" | null;
+  battery_cycle_count: number | null;
+  battery_design_capacity_mah: number | null;
+  battery_full_charge_capacity_mah: number | null;
+  battery_health_percent: number | null;
+  thermal_state: "nominal" | "fair" | "serious" | "critical" | "unknown" | null;
   charging: boolean | null;
   lid_closed: boolean | null;
   network_checked: number;
@@ -20,12 +26,26 @@ export type IncomingHealth = {
   internet_latency_ms: number | null;
   internet_responsiveness_rpm: number | null;
   internet_speed_measured_at: string | null;
+  network_diagnostics_enabled: boolean;
+  network_route_available: boolean | null;
+  network_gateway_reachable: boolean | null;
+  network_dns_available: boolean | null;
+  network_https_available: boolean | null;
+  network_ingest_reachable: boolean | null;
+  network_gateway_latency_ms: number | null;
+  network_gateway_jitter_ms: number | null;
+  network_gateway_packet_loss_percent: number | null;
+  network_fault: "none" | "local-network" | "dns" | "internet" | "dashboard-ingest" | "unknown" | null;
+  network_diagnostics_measured_at: string | null;
   chrome_checked: number;
   chrome_running: boolean | null;
 };
 
 const healthStates = new Set(["healthy", "unavailable", "degraded"]);
 const modes = new Set(["user", "system"]);
+const batteryConditions = new Set(["normal", "service-recommended", "unknown"]);
+const thermalStates = new Set(["nominal", "fair", "serious", "critical", "unknown"]);
+const networkFaults = new Set(["none", "local-network", "dns", "internet", "dashboard-ingest", "unknown"]);
 
 function nullableBoolean(value: unknown): value is boolean | null {
   return value === null || typeof value === "boolean";
@@ -48,6 +68,23 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
   const internetLatencyMs = item.internet_latency_ms ?? null;
   const internetResponsivenessRpm = item.internet_responsiveness_rpm ?? null;
   const internetSpeedMeasuredAt = item.internet_speed_measured_at ?? null;
+  const batteryCondition = item.battery_condition ?? null;
+  const batteryCycleCount = item.battery_cycle_count ?? null;
+  const batteryDesignCapacityMah = item.battery_design_capacity_mah ?? null;
+  const batteryFullChargeCapacityMah = item.battery_full_charge_capacity_mah ?? null;
+  const batteryHealthPercent = item.battery_health_percent ?? null;
+  const thermalState = item.thermal_state ?? null;
+  const networkDiagnosticsEnabled = item.network_diagnostics_enabled ?? false;
+  const networkRouteAvailable = item.network_route_available ?? null;
+  const networkGatewayReachable = item.network_gateway_reachable ?? null;
+  const networkDnsAvailable = item.network_dns_available ?? null;
+  const networkHttpsAvailable = item.network_https_available ?? null;
+  const networkIngestReachable = item.network_ingest_reachable ?? null;
+  const networkGatewayLatencyMs = item.network_gateway_latency_ms ?? null;
+  const networkGatewayJitterMs = item.network_gateway_jitter_ms ?? null;
+  const networkGatewayPacketLossPercent = item.network_gateway_packet_loss_percent ?? null;
+  const networkFault = item.network_fault ?? null;
+  const networkDiagnosticsMeasuredAt = item.network_diagnostics_measured_at ?? null;
   const hasSpeedMeasurement = internetSpeedMeasuredAt !== null || internetDownloadMbps !== null ||
     internetUploadMbps !== null || internetLatencyMs !== null || internetResponsivenessRpm !== null;
 
@@ -64,6 +101,12 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
     typeof item.idle_sleep_prevented !== "boolean" ||
     typeof item.power_source !== "string" || item.power_source.length > 64 ||
     !(battery === null || (Number.isInteger(battery) && Number(battery) >= 0 && Number(battery) <= 100)) ||
+    !(batteryCondition === null || (typeof batteryCondition === "string" && batteryConditions.has(batteryCondition))) ||
+    !nullableNumber(batteryCycleCount, 100_000) ||
+    !nullableNumber(batteryDesignCapacityMah, 100_000) ||
+    !nullableNumber(batteryFullChargeCapacityMah, 100_000) ||
+    !nullableNumber(batteryHealthPercent, 200) ||
+    !(thermalState === null || (typeof thermalState === "string" && thermalStates.has(thermalState))) ||
     !nullableBoolean(item.charging) || !nullableBoolean(item.lid_closed) ||
     !(item.network_checked === 0 || item.network_checked === 1) ||
     !nullableBoolean(item.network_available) ||
@@ -77,6 +120,18 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
     (hasSpeedMeasurement && (!internetSpeedEnabled || internetDownloadMbps === null ||
       internetUploadMbps === null || internetLatencyMs === null ||
       internetResponsivenessRpm === null || internetSpeedMeasuredAt === null)) ||
+    typeof networkDiagnosticsEnabled !== "boolean" ||
+    !nullableBoolean(networkRouteAvailable) ||
+    !nullableBoolean(networkGatewayReachable) ||
+    !nullableBoolean(networkDnsAvailable) ||
+    !nullableBoolean(networkHttpsAvailable) ||
+    !nullableBoolean(networkIngestReachable) ||
+    !nullableNumber(networkGatewayLatencyMs, 60_000) ||
+    !nullableNumber(networkGatewayJitterMs, 60_000) ||
+    !nullableNumber(networkGatewayPacketLossPercent, 100) ||
+    !(networkFault === null || (typeof networkFault === "string" && networkFaults.has(networkFault))) ||
+    !(networkDiagnosticsMeasuredAt === null || (typeof networkDiagnosticsMeasuredAt === "string" &&
+      !Number.isNaN(Date.parse(networkDiagnosticsMeasuredAt)))) ||
     !(item.chrome_checked === 0 || item.chrome_checked === 1) ||
     !nullableBoolean(item.chrome_running)
   ) return null;
@@ -91,5 +146,22 @@ export function parseIncomingHealth(value: unknown): IncomingHealth | null {
     internet_latency_ms: internetLatencyMs,
     internet_responsiveness_rpm: internetResponsivenessRpm,
     internet_speed_measured_at: internetSpeedMeasuredAt,
+    battery_condition: batteryCondition,
+    battery_cycle_count: batteryCycleCount,
+    battery_design_capacity_mah: batteryDesignCapacityMah,
+    battery_full_charge_capacity_mah: batteryFullChargeCapacityMah,
+    battery_health_percent: batteryHealthPercent,
+    thermal_state: thermalState,
+    network_diagnostics_enabled: networkDiagnosticsEnabled,
+    network_route_available: networkRouteAvailable,
+    network_gateway_reachable: networkGatewayReachable,
+    network_dns_available: networkDnsAvailable,
+    network_https_available: networkHttpsAvailable,
+    network_ingest_reachable: networkIngestReachable,
+    network_gateway_latency_ms: networkGatewayLatencyMs,
+    network_gateway_jitter_ms: networkGatewayJitterMs,
+    network_gateway_packet_loss_percent: networkGatewayPacketLossPercent,
+    network_fault: networkFault,
+    network_diagnostics_measured_at: networkDiagnosticsMeasuredAt,
   } as IncomingHealth;
 }

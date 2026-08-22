@@ -21,6 +21,12 @@ type Sample = {
   idleSleepPrevented: boolean;
   powerSource: string;
   batteryPercent: number | null;
+  batteryCondition: string | null;
+  batteryCycleCount: number | null;
+  batteryDesignCapacityMah: number | null;
+  batteryFullChargeCapacityMah: number | null;
+  batteryHealthPercent: number | null;
+  thermalState: string | null;
   charging: boolean | null;
   lidClosed: boolean | null;
   networkChecked: boolean;
@@ -31,6 +37,17 @@ type Sample = {
   internetLatencyMs: number | null;
   internetResponsivenessRpm: number | null;
   internetSpeedMeasuredAt: string | null;
+  networkDiagnosticsEnabled: boolean;
+  networkRouteAvailable: boolean | null;
+  networkGatewayReachable: boolean | null;
+  networkDnsAvailable: boolean | null;
+  networkHttpsAvailable: boolean | null;
+  networkIngestReachable: boolean | null;
+  networkGatewayLatencyMs: number | null;
+  networkGatewayJitterMs: number | null;
+  networkGatewayPacketLossPercent: number | null;
+  networkFault: string | null;
+  networkDiagnosticsMeasuredAt: string | null;
   chromeChecked: boolean;
   chromeRunning: boolean | null;
 };
@@ -74,6 +91,10 @@ type AlertSettings = {
   alert_power: boolean;
   alert_network: boolean;
   alert_chrome: boolean;
+  alert_battery_health: boolean;
+  alert_thermal: boolean;
+  battery_health_threshold: number;
+  battery_degradation_threshold: number;
   updated_at: string;
 };
 
@@ -86,11 +107,22 @@ type AlertEvent = {
   message: string;
   delivered: number | boolean;
   delivery_error: string | null;
+  delivery_attempts: number;
+  next_attempt_at: string | null;
+  delivery_target: string | null;
+  delivered_at: string | null;
 };
 
 type AlertsResponse = {
   settings: AlertSettings;
   webhook_configured: boolean;
+  fallback_webhook_configured: boolean;
+  scheduler: {
+    last_run_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+    last_canary_at: string | null;
+  } | null;
   events: AlertEvent[];
 };
 
@@ -304,6 +336,9 @@ export default function Dashboard() {
   const risk = useMemo(() => {
     if (!online) return tx("No fresh heartbeat. Sleep, power loss, or network loss are possible.", "没有新心跳；可能是睡眠、断电或断网。 ");
     if (!latest?.idleSleepPrevented || latest.serviceState !== "running") return tx("KeepAwake is not verified. The Mac may idle-sleep.", "KeepAwake 未验证，电脑可能进入闲置睡眠。 ");
+    if (latest.thermalState === "serious" || latest.thermalState === "critical") return tx(`Thermal pressure is ${latest.thermalState}. Reduce heat and workload.`, `温度压力为 ${latest.thermalState}，请降低热量与负载。`);
+    if (latest.batteryCondition === "service-recommended") return tx("macOS recommends battery service.", "macOS 建议检修电池。");
+    if (latest.networkDiagnosticsEnabled && latest.networkFault && !["none", "unknown"].includes(latest.networkFault)) return tx(`Network fault isolated to: ${latest.networkFault}.`, `网络故障范围：${latest.networkFault}。`);
     if (latest.networkChecked && latest.networkAvailable === false) return tx("The network check failed. Remote access is unlikely.", "网络检查失败，远程连接很可能不可用。 ");
     if (latest.chromeChecked && latest.chromeRunning === false) return tx("Chrome Remote Desktop is not running.", "Chrome Remote Desktop 没有运行。 ");
     if (/battery/i.test(latest.powerSource) && latest.charging !== true) return tx("Running on battery. Watch remaining charge.", "正在使用电池，请留意剩余电量。 ");
@@ -312,6 +347,7 @@ export default function Dashboard() {
 
   const connection = useMemo(() => {
     if (!online) return tx("Not currently reachable", "目前可能无法连接");
+    if (latest?.networkDiagnosticsEnabled && latest.networkFault && !["none", "unknown"].includes(latest.networkFault)) return tx(`Network issue: ${latest.networkFault}`, `网络问题：${latest.networkFault}`);
     if (latest?.networkChecked && latest.networkAvailable === false) return tx("Remote access unlikely", "远程连接可能失败");
     if (latest?.chromeChecked && latest.chromeRunning === false) return tx("Chrome remote access may fail", "Chrome 远程连接可能失败");
     if (!latest?.networkChecked || !latest.chromeChecked) return tx("Mac is awake; remote path not fully checked", "电脑清醒；远程链路未完全检查");
@@ -332,10 +368,28 @@ export default function Dashboard() {
       detail: latest ? `${latest.powerSource}${battery === null ? "" : ` · ${battery}%`}` : tx("No report", "没有数据"),
     },
     {
-      label: tx("Network", "网络"),
-      checked: Boolean(latest?.networkChecked),
-      passed: latest?.networkAvailable === true,
-      detail: !latest?.networkChecked ? tx("Not checked by this reporter", "此 reporter 未检查") : latest.networkAvailable ? tx("Configured check passed", "指定网络检查已通过") : tx("Check router, Wi-Fi, and internet access", "检查路由器、Wi-Fi 与互联网"),
+      label: tx("Local route & gateway", "本地路由与网关"),
+      checked: Boolean(latest?.networkDiagnosticsEnabled),
+      passed: latest?.networkRouteAvailable === true && latest?.networkGatewayReachable === true,
+      detail: !latest?.networkDiagnosticsEnabled ? tx("Not checked by this reporter", "此 reporter 未检查") : `${formatMeasurement(latest.networkGatewayLatencyMs, "ms")} · ${formatMeasurement(latest.networkGatewayPacketLossPercent, "%")} ${tx("loss", "丢包")}`,
+    },
+    {
+      label: "DNS",
+      checked: Boolean(latest?.networkDiagnosticsEnabled),
+      passed: latest?.networkDnsAvailable === true,
+      detail: latest?.networkDnsAvailable ? tx("Name resolution passed", "域名解析通过") : tx("DNS resolution failed or was not measured", "DNS 解析失败或未测量"),
+    },
+    {
+      label: tx("Public HTTPS", "公网 HTTPS"),
+      checked: Boolean(latest?.networkDiagnosticsEnabled),
+      passed: latest?.networkHttpsAvailable === true,
+      detail: latest?.networkHttpsAvailable ? tx("Bounded HTTPS probe passed", "限时 HTTPS 探测通过") : tx("Upstream internet or TLS needs attention", "上游互联网或 TLS 需检查"),
+    },
+    {
+      label: tx("Dashboard ingest", "面板接收端"),
+      checked: Boolean(latest?.networkDiagnosticsEnabled),
+      passed: latest?.networkIngestReachable === true,
+      detail: latest?.networkIngestReachable ? tx("Heartbeat endpoint is reachable", "心跳端点可连接") : tx("Dashboard path could not be reached", "无法连接面板路径"),
     },
     {
       label: "Chrome Remote Desktop",
@@ -355,6 +409,9 @@ export default function Dashboard() {
       if (before.powerSource !== after.powerSource) events.push({ key: `power-${after.id}`, time: after.reportedAt, text: `${tx("Power changed to", "电源切换为")} ${after.powerSource}` });
       if (before.idleSleepPrevented !== after.idleSleepPrevented) events.push({ key: `awake-${after.id}`, time: after.reportedAt, text: after.idleSleepPrevented ? tx("KeepAwake protection recovered", "KeepAwake 防护恢复") : tx("KeepAwake protection stopped", "KeepAwake 防护停止") });
       if (before.lidClosed !== after.lidClosed) events.push({ key: `lid-${after.id}`, time: after.reportedAt, text: after.lidClosed ? tx("Lid closed", "屏幕盖关闭") : tx("Lid opened", "屏幕盖打开") });
+      if (before.batteryCondition !== after.batteryCondition) events.push({ key: `battery-health-${after.id}`, time: after.reportedAt, text: `${tx("Battery condition changed to", "电池状态变为")} ${after.batteryCondition ?? "unknown"}` });
+      if (before.thermalState !== after.thermalState) events.push({ key: `thermal-${after.id}`, time: after.reportedAt, text: `${tx("Thermal state changed to", "温度状态变为")} ${after.thermalState ?? "unknown"}` });
+      if (before.networkFault !== after.networkFault) events.push({ key: `network-fault-${after.id}`, time: after.reportedAt, text: `${tx("Network diagnosis changed to", "网络诊断变为")} ${after.networkFault ?? "unknown"}` });
     }
     return events.slice(-12).reverse();
   }, [history, language, tx]);
@@ -399,7 +456,7 @@ export default function Dashboard() {
         body: JSON.stringify(alerts.settings),
       });
       if (!response.ok) throw new Error("save");
-      const saved = await response.json() as Pick<AlertsResponse, "settings" | "webhook_configured">;
+      const saved = await response.json() as Pick<AlertsResponse, "settings" | "webhook_configured" | "fallback_webhook_configured">;
       setAlerts((current) => current ? { ...current, ...saved } : current);
       setMessage(tx("Alert settings saved.", "提醒设置已保存。"));
     } catch {
@@ -422,8 +479,11 @@ export default function Dashboard() {
       `Last heartbeat: ${latest ? toIsoTimestamp(latest.receivedAt) : "none"}`,
       `Heartbeat age: ${currentAge ?? "unknown"} seconds`,
       `Power: ${latest?.powerSource ?? "unknown"}; battery: ${battery ?? "unknown"}%`,
+      `Battery health: ${latest?.batteryHealthPercent ?? "unknown"}%; cycles: ${latest?.batteryCycleCount ?? "unknown"}; condition: ${latest?.batteryCondition ?? "unknown"}`,
+      `Thermal state: ${latest?.thermalState ?? "unknown"}`,
       `Internet speed: download ${latest?.internetDownloadMbps ?? "unknown"} Mbps; upload ${latest?.internetUploadMbps ?? "unknown"} Mbps; latency ${latest?.internetLatencyMs ?? "unknown"} ms`,
       `Internet speed measured: ${speedMeasuredAt ? toIsoTimestamp(speedMeasuredAt) : "never"}`,
+      `Network fault: ${latest?.networkFault ?? "unknown"}; gateway latency: ${latest?.networkGatewayLatencyMs ?? "unknown"} ms; jitter: ${latest?.networkGatewayJitterMs ?? "unknown"} ms; loss: ${latest?.networkGatewayPacketLossPercent ?? "unknown"}%`,
       ...diagnosticRows.map((row) => `${row.label}: ${!row.checked ? "not checked" : row.passed ? "passed" : "failed"}`),
       `Version: ${latest?.version ?? "unknown"}; mode: ${latest?.mode ?? "unknown"}`,
     ];
@@ -531,6 +591,23 @@ export default function Dashboard() {
         <p className="evidence-note">{tx("Apple networkQuality measures this remote Mac's connection. A test transfers data and can briefly compete with remote-control traffic, so the reporter caches the result instead of testing every minute. RPM means round trips per minute; higher is better.", "Apple networkQuality 测量的是这台远程 Mac 的连接。测速会传输数据，并可能短暂占用远程控制带宽，因此 reporter 会缓存结果，而不是每分钟测速。RPM 表示每分钟往返次数，越高越好。")}</p>
       </section>
 
+      <section className="speed-card" aria-labelledby="hardware-title">
+        <div className="section-heading"><div><span>{tx("Read-only macOS hardware signals", "macOS 只读硬件信号")}</span><h2 id="hardware-title">{tx("Battery health & thermal pressure", "电池健康与温度压力")}</h2></div><span className={`config-pill ${latest?.batteryCondition === "normal" && latest?.thermalState === "nominal" ? "configured" : ""}`}>{latest?.batteryCondition ?? tx("Not available", "暂无")}</span></div>
+        <div className="speed-grid hardware-grid">
+          <article><span>{tx("Battery health", "电池健康度")}</span><strong>{formatMeasurement(latest?.batteryHealthPercent, "%")}</strong></article>
+          <article><span>{tx("Cycle count", "循环次数")}</span><strong>{latest?.batteryCycleCount ?? "—"}</strong></article>
+          <article><span>{tx("Full / design capacity", "满充 / 设计容量")}</span><strong>{latest?.batteryFullChargeCapacityMah ?? "—"} / {latest?.batteryDesignCapacityMah ?? "—"} mAh</strong></article>
+          <article><span>{tx("Thermal state", "温度状态")}</span><strong>{latest?.thermalState ?? "—"}</strong></article>
+        </div>
+        <div className="trend-grid" aria-label={tx("Hardware and network time-series trends", "硬件与网络时间趋势") }>
+          <article><h3>{tx("Battery health trend", "电池健康趋势")}</h3><div className="mini-trend" role="img" aria-label={tx("Battery health percentage over loaded history", "已载入历史中的电池健康百分比")}>{displayedHistory.map((sample) => <span key={`health-${sample.id}`} className={sample.batteryHealthPercent === null ? "unknown" : ""} style={{ height: `${Math.max(6, Math.min(100, sample.batteryHealthPercent ?? 6))}%` }} title={`${formatTime(sample.reportedAt, language)} · ${sample.batteryHealthPercent ?? "—"}%`} />)}</div></article>
+          <article><h3>{tx("Thermal pressure trend", "温控压力趋势")}</h3><div className="mini-trend thermal-trend" role="img" aria-label={tx("Thermal pressure over loaded history", "已载入历史中的温控压力")}>{displayedHistory.map((sample) => { const height = sample.thermalState === "critical" ? 100 : sample.thermalState === "serious" ? 75 : sample.thermalState === "fair" ? 50 : sample.thermalState === "nominal" ? 25 : 6; return <span key={`thermal-${sample.id}`} className={`thermal-${sample.thermalState ?? "unknown"}`} style={{ height: `${height}%` }} title={`${formatTime(sample.reportedAt, language)} · ${sample.thermalState ?? "unknown"}`} />; })}</div></article>
+          <article><h3>{tx("Gateway reliability trend", "网关可靠性趋势")}</h3><div className="mini-trend network-trend" role="img" aria-label={tx("Gateway success adjusted for packet loss over loaded history", "已载入历史中按丢包调整的网关成功率")}>{displayedHistory.map((sample) => <span key={`network-${sample.id}`} className={!sample.networkDiagnosticsEnabled ? "unknown" : sample.networkFault !== "none" ? "fault" : ""} style={{ height: `${Math.max(6, 100 - (sample.networkGatewayPacketLossPercent ?? 100))}%` }} title={`${formatTime(sample.networkDiagnosticsMeasuredAt ?? sample.reportedAt, language)} · ${sample.networkGatewayLatencyMs ?? "—"} ms · ${sample.networkGatewayJitterMs ?? "—"} ms jitter · ${sample.networkGatewayPacketLossPercent ?? "—"}% loss`} />)}</div></article>
+        </div>
+        <p className="speed-timestamp">{tx("Hardware sample — exact local time", "硬件样本 — 本地准确时间")}: <strong><time dateTime={latest ? toIsoTimestamp(latest.reportedAt) : undefined}>{formatTime(latest?.reportedAt ?? null, language)}</time></strong></p>
+        <p className="evidence-note">{tx("These values come from read-only built-in macOS interfaces. Mac Pulse never changes charging behavior or installs a privileged hardware helper.", "这些数值来自 macOS 内置只读接口。Mac Pulse 不会改变充电行为，也不会安装特权硬件辅助程序。")}</p>
+      </section>
+
       <section className="diagnostics-card" aria-labelledby="diagnostics-title">
         <div className="section-heading"><div><span>{tx("Evidence-based checks", "基于数据的检查")}</span><h2 id="diagnostics-title">{tx("Remote access diagnostics", "远程连接诊断")}</h2></div><button className="secondary-button" type="button" onClick={() => void copyDiagnostics()}>{tx("Copy safe diagnostics", "复制安全诊断")}</button></div>
         <div className="diagnostic-grid">{diagnosticRows.map((row) => <article key={row.label}><div><span className={`diagnostic-icon ${!row.checked ? "unknown" : row.passed ? "passed" : "failed"}`} aria-hidden="true">{!row.checked ? "?" : row.passed ? "✓" : "!"}</span><strong>{row.label}</strong></div><p>{!row.checked ? tx("Not checked", "未检查") : row.passed ? tx("Passed", "通过") : tx("Needs attention", "需处理")}</p><small>{row.detail}</small></article>)}</div>
@@ -546,15 +623,27 @@ export default function Dashboard() {
         <p className="evidence-note">{tx("Uptime is inferred from heartbeat gaps. Storage is an estimate; all accepted samples are kept until you delete them or the hosting lifecycle removes them.", "在线率依据心跳间隔推算；存储量为估算。所有已接收样本会保留，直到你删除或托管生命周期移除。")}</p>
         <div className="history-scroll" role="region" aria-label={tx("Scrollable battery chart", "可滚动电量图表")}><div className="history-bars" style={{ gridTemplateColumns: `repeat(${Math.max(displayedHistory.length, 1)}, minmax(10px, 1fr))` }}>{displayedHistory.map((sample) => { const selected = selectedSample?.id === sample.id; const description = `${formatTime(sample.reportedAt, language)} · ${sample.batteryPercent ?? "—"}% · ${sample.idleSleepPrevented ? tx("protected", "已防护") : tx("unprotected", "未防护")}`; return <button key={sample.id} type="button" className={`history-bar${sample.idleSleepPrevented ? "" : " unprotected-bar"}${selected ? " is-selected" : ""}`} style={{ height: `${Math.max(8, sample.batteryPercent ?? 8)}%` }} title={description} aria-label={`${tx("Select sample", "选择样本")}: ${description}`} aria-pressed={selected} onClick={() => setSelectedSampleId(sample.id)} />; })}{!displayedHistory.length && <span className="empty-history">{historyLoading ? tx("Loading…", "载入中…") : tx("No samples in this range", "此范围没有样本")}</span>}</div></div>
         {displayedHistory.length > 0 && <div className="history-axis">{historyTicks.map((index) => { const sample = displayedHistory[index]; const position = displayedHistory.length === 1 ? 0 : index / (displayedHistory.length - 1) * 100; return <time key={sample.id} className={index === 0 ? "axis-first" : index === displayedHistory.length - 1 ? "axis-last" : ""} style={{ left: `${position}%` }} dateTime={toIsoTimestamp(sample.reportedAt)}>{formatTime(sample.reportedAt, language, false)}</time>; })}</div>}
-        {selectedSample && <div className="history-detail" aria-live="polite"><div><span>{tx("Exact local timestamp", "本地准确时间")}</span><strong><time dateTime={toIsoTimestamp(selectedSample.reportedAt)}>{formatTime(selectedSample.reportedAt, language)}</time></strong></div><div><span>{tx("Battery", "电量")}</span><strong>{selectedSample.batteryPercent ?? "—"}%</strong></div><div><span>KeepAwake</span><strong>{selectedSample.idleSleepPrevented ? tx("Protected", "已防护") : tx("Not protected", "未防护")}</strong></div><div><span>{tx("Power", "电源")}</span><strong>{selectedSample.powerSource}</strong></div><div><span>{tx("Download / upload", "下载 / 上传")}</span><strong>{formatMeasurement(selectedSample.internetDownloadMbps, "Mbps")} / {formatMeasurement(selectedSample.internetUploadMbps, "Mbps")}</strong></div><div><span>{tx("Speed-test timestamp", "测速时间")}</span><strong><time dateTime={selectedSample.internetSpeedMeasuredAt ? toIsoTimestamp(selectedSample.internetSpeedMeasuredAt) : undefined}>{formatTime(selectedSample.internetSpeedMeasuredAt, language)}</time></strong></div></div>}
+        {selectedSample && <div className="history-detail" aria-live="polite"><div><span>{tx("Exact local timestamp", "本地准确时间")}</span><strong><time dateTime={toIsoTimestamp(selectedSample.reportedAt)}>{formatTime(selectedSample.reportedAt, language)}</time></strong></div><div><span>{tx("Battery", "电量")}</span><strong>{selectedSample.batteryPercent ?? "—"}%</strong></div><div><span>{tx("Battery health / cycles", "电池健康 / 循环")}</span><strong>{formatMeasurement(selectedSample.batteryHealthPercent, "%")} / {selectedSample.batteryCycleCount ?? "—"}</strong></div><div><span>{tx("Thermal state", "温度状态")}</span><strong>{selectedSample.thermalState ?? "—"}</strong></div><div><span>KeepAwake</span><strong>{selectedSample.idleSleepPrevented ? tx("Protected", "已防护") : tx("Not protected", "未防护")}</strong></div><div><span>{tx("Power", "电源")}</span><strong>{selectedSample.powerSource}</strong></div><div><span>{tx("Download / upload", "下载 / 上传")}</span><strong>{formatMeasurement(selectedSample.internetDownloadMbps, "Mbps")} / {formatMeasurement(selectedSample.internetUploadMbps, "Mbps")}</strong></div><div><span>{tx("Network fault / measured", "网络故障 / 测量时间")}</span><strong>{selectedSample.networkFault ?? "—"} · <time dateTime={selectedSample.networkDiagnosticsMeasuredAt ? toIsoTimestamp(selectedSample.networkDiagnosticsMeasuredAt) : undefined}>{formatTime(selectedSample.networkDiagnosticsMeasuredAt, language)}</time></strong></div><div><span>{tx("Speed-test timestamp", "测速时间")}</span><strong><time dateTime={selectedSample.internetSpeedMeasuredAt ? toIsoTimestamp(selectedSample.internetSpeedMeasuredAt) : undefined}>{formatTime(selectedSample.internetSpeedMeasuredAt, language)}</time></strong></div></div>}
         {historyCursor && <button className="load-more" type="button" disabled={historyLoading} onClick={() => void loadHistory(historyCursor)}>{historyLoading ? tx("Loading…", "载入中…") : tx("Load earlier samples", "载入更早样本")}</button>}
         <div className="event-list"><h3>{tx("Detected transitions", "检测到的状态变化")}</h3>{historyEvents.length ? historyEvents.map((event) => <div key={event.key}><time dateTime={toIsoTimestamp(event.time)}>{formatTime(event.time, language)}</time><span>{event.text}</span></div>) : <p>{tx("No transitions detected in loaded samples.", "已载入样本中没有检测到状态变化。")}</p>}</div>
         {deleteOpen && <div className="danger-zone" role="group" aria-labelledby="delete-title"><h3 id="delete-title">{tx("Permanently delete all heartbeat history", "永久删除全部心跳历史")}</h3><p>{tx("This cannot be undone. Type DELETE HISTORY exactly.", "此操作无法撤销。请准确输入 DELETE HISTORY。")}</p><div><input aria-label={tx("Deletion confirmation", "删除确认文字")} value={deletePhrase} onChange={(event) => setDeletePhrase(event.target.value)} /><button type="button" disabled={deletePhrase !== "DELETE HISTORY"} onClick={() => void deleteHistory()}>{tx("Delete permanently", "永久删除")}</button></div></div>}
       </section>
 
       <section className="alerts-card" aria-labelledby="alerts-title">
-        <div className="section-heading"><div><span>{tx("Optional outbound notification", "可选外部通知")}</span><h2 id="alerts-title">{tx("Alert center", "提醒中心")}</h2></div><div className="alert-delivery-summary"><span className={`config-pill ${alerts?.webhook_configured ? "configured" : ""}`}>{alerts?.webhook_configured ? tx("Webhook configured", "Webhook 已配置") : tx("Webhook not configured", "Webhook 未配置")}</span><small>{tx("Last successful delivery", "上次成功发送")}: {lastSuccessfulDelivery ? formatTime(lastSuccessfulDelivery.created_at, language) : tx("None yet", "尚无")}</small></div></div>
-        {alerts ? <><div className="alert-settings"><label className="switch-row"><input type="checkbox" checked={alerts.settings.enabled} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, enabled: event.target.checked } })} /><span><strong>{tx("Enable alerts", "开启提醒")}</strong><small>{tx("Events are recorded and a minimal webhook is attempted.", "记录事件，并尝试发送最小化 webhook。")}</small></span></label><label>{tx("Offline after (seconds)", "离线阈值（秒）")}<input type="number" min="90" max="3600" value={alerts.settings.offline_after_seconds} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, offline_after_seconds: Number(event.target.value) } })} /></label><label>{tx("Low battery at (%)", "低电量阈值（%）")}<input type="number" min="5" max="90" value={alerts.settings.battery_threshold} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, battery_threshold: Number(event.target.value) } })} /></label></div><div className="toggle-grid">{(["alert_keepawake", "alert_power", "alert_network", "alert_chrome"] as const).map((key) => { const label = key === "alert_keepawake" ? "KeepAwake" : key === "alert_power" ? tx("Power", "电源") : key === "alert_network" ? tx("Network", "网络") : "Chrome Remote Desktop"; return <div key={key}><input id={`toggle-${key}`} type="checkbox" checked={alerts.settings[key]} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, [key]: event.target.checked } })} /><label htmlFor={`toggle-${key}`}>{label}</label></div>; })}</div><div className="section-actions"><button className="primary-button" type="button" disabled={alertsSaving} onClick={() => void saveAlerts()}>{alertsSaving ? tx("Saving…", "保存中…") : tx("Save alert settings", "保存提醒设置")}</button><button className="secondary-button" type="button" onClick={() => void testAlert()}>{tx("Send test", "发送测试")}</button></div><p className="evidence-note">{tx("The webhook contains only product, alert kind/state/severity, and time—never device identity, battery details, PID, or secrets. Offline alerts require an external scheduler to call the protected check endpoint because an offline Mac cannot report itself.", "Webhook 只包含产品名、提醒类型/状态/级别与时间，绝不包含设备身份、电量细节、PID 或密钥。离线提醒需要外部定时器调用受保护的检查端点，因为离线 Mac 无法自行上报。")}</p><div className="alert-events"><h3>{tx("Recent alert events", "最近提醒事件")}</h3>{alerts.events.length ? alerts.events.map((event) => <div key={event.id}><span className={`event-state ${event.state}`}>{event.state}</span><strong>{event.message}</strong><time dateTime={toIsoTimestamp(event.created_at)}>{formatTime(event.created_at, language)}</time><small>{event.delivered ? tx("Delivered", "已发送") : event.delivery_error ?? tx("Not delivered", "未发送")}</small></div>) : <p>{tx("No alert transitions recorded yet.", "尚未记录提醒状态变化。")}</p>}</div></> : <p>{tx("Loading alert settings…", "正在载入提醒设置…")}</p>}
+        <div className="section-heading"><div><span>{tx("Autonomous outbound notification", "自主外部通知")}</span><h2 id="alerts-title">{tx("Alert center", "提醒中心")}</h2></div><div className="alert-delivery-summary"><span className={`config-pill ${alerts?.webhook_configured ? "configured" : ""}`}>{alerts?.webhook_configured ? tx("Primary webhook configured", "主 Webhook 已配置") : tx("Webhook not configured", "Webhook 未配置")}</span><small>{tx("Fallback", "备用")}: {alerts?.fallback_webhook_configured ? tx("configured", "已配置") : tx("not configured", "未配置")} · {tx("Last successful delivery", "上次成功发送")}: {lastSuccessfulDelivery ? formatTime(lastSuccessfulDelivery.delivered_at ?? lastSuccessfulDelivery.created_at, language) : tx("None yet", "尚无")}</small><small>{tx("Scheduler last success", "定时器上次成功")}: {formatTime(alerts?.scheduler?.last_success_at ?? null, language)}{alerts?.scheduler?.last_error ? ` · ${alerts.scheduler.last_error}` : ""}</small></div></div>
+        {alerts ? <>
+          <div className="alert-settings">
+            <label className="switch-row"><input type="checkbox" checked={alerts.settings.enabled} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, enabled: event.target.checked } })} /><span><strong>{tx("Enable alerts", "开启提醒")}</strong><small>{tx("Events are recorded and a minimal webhook is attempted.", "记录事件，并尝试发送最小化 webhook。")}</small></span></label>
+            <label>{tx("Offline after (seconds)", "离线阈值（秒）")}<input type="number" min="90" max="3600" value={alerts.settings.offline_after_seconds} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, offline_after_seconds: Number(event.target.value) } })} /></label>
+            <label>{tx("Low battery at (%)", "低电量阈值（%）")}<input type="number" min="5" max="90" value={alerts.settings.battery_threshold} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, battery_threshold: Number(event.target.value) } })} /></label>
+            <label>{tx("Battery health warning (%)", "电池健康警戒值（%）")}<input type="number" min="50" max="100" value={alerts.settings.battery_health_threshold} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, battery_health_threshold: Number(event.target.value) } })} /></label>
+            <label>{tx("Rapid health drop (points)", "健康度快速下降（百分点）")}<input type="number" min="1" max="20" value={alerts.settings.battery_degradation_threshold} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, battery_degradation_threshold: Number(event.target.value) } })} /></label>
+          </div>
+          <div className="toggle-grid">{(["alert_keepawake", "alert_power", "alert_network", "alert_chrome", "alert_battery_health", "alert_thermal"] as const).map((key) => { const label = key === "alert_keepawake" ? "KeepAwake" : key === "alert_power" ? tx("Power", "电源") : key === "alert_network" ? tx("Network", "网络") : key === "alert_chrome" ? "Chrome Remote Desktop" : key === "alert_battery_health" ? tx("Battery health", "电池健康") : tx("Thermal pressure", "温度压力"); return <div key={key}><input id={`toggle-${key}`} type="checkbox" checked={alerts.settings[key]} onChange={(event) => setAlerts({ ...alerts, settings: { ...alerts.settings, [key]: event.target.checked } })} /><label htmlFor={`toggle-${key}`}>{label}</label></div>; })}</div>
+          <div className="section-actions"><button className="primary-button" type="button" disabled={alertsSaving} onClick={() => void saveAlerts()}>{alertsSaving ? tx("Saving…", "保存中…") : tx("Save alert settings", "保存提醒设置")}</button><button className="secondary-button" type="button" onClick={() => void testAlert()}>{tx("Send test", "发送测试")}</button></div>
+          <p className="evidence-note">{tx("The Worker checks offline state every minute, holds a duplicate-prevention lease, retries temporary delivery failures, and can use a fallback webhook plus an external scheduler canary. Payloads contain only product, kind/state/severity, and time—never device identity, battery details, PID, or secrets.", "Worker 每分钟检查离线状态，使用防重复租约，重试临时发送失败，并可使用备用 Webhook 与外部定时器 canary。消息只包含产品名、类型/状态/级别与时间，绝不包含设备身份、电量细节、PID 或密钥。")}</p>
+          <div className="alert-events"><h3>{tx("Recent alert events", "最近提醒事件")}</h3>{alerts.events.length ? alerts.events.map((event) => <div key={event.id}><span className={`event-state ${event.state}`}>{event.state}</span><strong>{event.message}</strong><time dateTime={toIsoTimestamp(event.created_at)}>{formatTime(event.created_at, language)}</time><small>{event.delivered ? `${tx("Delivered", "已发送")} · ${event.delivery_target ?? "primary"}` : `${event.delivery_error ?? tx("Not delivered", "未发送")} · ${event.delivery_attempts} ${tx("attempts", "次尝试")}${event.next_attempt_at ? ` · ${tx("retry", "重试")} ${formatTime(event.next_attempt_at, language)}` : ""}`}</small></div>) : <p>{tx("No alert transitions recorded yet.", "尚未记录提醒状态变化。")}</p>}</div>
+        </> : <p>{tx("Loading alert settings…", "正在载入提醒设置…")}</p>}
       </section>
 
       <footer><span><i className="privacy-dot" /> {tx("Private, owner-only monitoring", "私密、仅限所有者的监控")}</span><span>{tx("Last refresh", "最后刷新")} · {formatAge(currentAge, language)}</span></footer>

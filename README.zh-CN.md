@@ -8,7 +8,7 @@
 [English](README.md) | [简体中文](README.zh-CN.md)  
 [英文 PRD](docs/PRD.en.md) | [中文 PRD](docs/PRD.zh-CN.md)
 
-当前版本：v1.3.0
+当前版本：v1.4.0
 
 ![Mac Pulse 合成数据面板预览](docs/assets/mac-pulse-synthetic.svg)
 
@@ -141,6 +141,7 @@ remote-mac-keepawake health --json --network --chrome
 - launchd 模式和服务状态；
 - 受管 PID 和防睡眠 assertion；
 - 电源来源、电量和充电状态；
+- 电池状况、循环次数、设计/满充容量、估算健康度和 macOS 温控压力状态；
 - MacBook 合盖状态。
 
 可选检查：
@@ -190,14 +191,30 @@ read -rs MAC_PULSE_SITES_TOKEN
 printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
   ./bin/remote-mac-heartbeat install \
   --url https://your-private-dashboard.example/api/heartbeat \
-  --token-stdin --sites-token-stdin --user --internet-speed
+  --token-stdin --sites-token-stdin --key-id current --user \
+  --network-diagnostics --internet-speed
 unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 ./bin/remote-mac-heartbeat status
 ```
 
-上报组件每 60 秒运行一次，不发送电脑名称、用户名、IP 地址、设备序列号、位置
+上报组件每 60 秒运行一次。每次上传都会使用 HMAC-SHA-256 对 key ID、传输时间、
+样本 ID 和正文摘要签名；服务端强制五分钟防重放窗口，并在不保存来源 IP 的前提下
+限制认证失败频率。上报不发送电脑名称、用户名、IP 地址、设备序列号、位置
 或密钥。生产站点使用仅限所有者的身份会话查看数据；上传密钥与私密站点自动
 访问令牌继续保持分离。
+
+先在服务端暂存下一把密钥，然后无需重启 reporter 即可轮换：
+
+```bash
+read -rs MAC_PULSE_INGEST_TOKEN_NEXT
+printf '%s\n' "$MAC_PULSE_INGEST_TOKEN_NEXT" | \
+  ./bin/remote-mac-heartbeat rotate-key --key-id next --token-stdin
+unset MAC_PULSE_INGEST_TOKEN_NEXT
+```
+
+服务端先把 key ID `next` 配置为 `INGEST_TOKEN_NEXT`，Mac 轮换成功后再提升为
+主密钥。`INGEST_TOKEN_PREVIOUS` 提供有限回滚槽。生产环境默认拒绝旧式纯 Bearer
+上传；迁移期只有显式设置 `ALLOW_LEGACY_INGEST_BEARER=1` 才会接受。
 
 每次上传前，上报组件都会先把样本原子写入权限为 `0700` 的私密本地 outbox。
 短暂故障会触发有限次数重试；仍未成功的样本会留在磁盘，网络恢复后按电脑实际
@@ -207,7 +224,12 @@ unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 补传完成。
 
 `--internet-speed` 会在远程 Mac 上调用 Apple 内置的 `networkQuality`，并自动
-开启基础网络连通性检查。60 秒心跳会复用缓存结果；默认每 21,600 秒（6 小时）
+开启隐私保护网络诊断。诊断只记录布尔结果、网关延迟/抖动/丢包、规范化故障类别
+和准确测量时间，绝不记录网关、DNS、SSID、公网 IP 或 endpoint 标识。只需要
+诊断而不测速时使用 `--network-diagnostics`，默认诊断间隔为 300 秒。使用
+`--network-probe-url HTTPS_URL` 可改成经过审核的中立 HTTPS 探测端点。
+探测进程使用较低 CPU 优先级和严格超时。60 秒心跳会复用缓存结果；默认每
+21,600 秒（6 小时）
 才重新测速，因为每次测速都会传输数据，也可能短暂占用远程控制带宽。可以使用
 `--speed-test-interval SECONDS` 设置 1,800 至 86,400 秒的间隔。两个测速参数都
 不提供时，测速完全关闭。
@@ -218,9 +240,13 @@ unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 生命周期限制。测速结果及其准确时间使用同一套留存、导出和删除流程。
 补传样本保留电脑实际观测时间，而不是稍后被网络接收的时间。
 
-可选远程提醒会对离线、电池、电源、KeepAwake、网络和 Chrome Remote Desktop
-状态变化去重，并记录恢复事件。服务端 webhook 目标绝不会进入心跳数据。可靠的
-离线提醒需要外部定时器，因为离线 Mac 无法自行报告故障。
+可选远程提醒会对离线、电量、电池健康、温控、电源、KeepAwake、网络和 Chrome
+Remote Desktop 状态变化去重，并记录恢复事件。Cloudflare Worker 每分钟在 D1
+租约保护下检查离线状态，对临时发送失败执行有限退避重试，并可切换到备用
+Webhook；可选外部 canary 还能验证 scheduler 本身是否存活。服务端 webhook 目标
+绝不会进入心跳数据。
+电池健康提醒可分别设置绝对健康度和快速下降阈值；非 critical 温控压力必须连续
+两个样本异常才会提醒。
 
 ## 重启和登出恢复检查
 
@@ -253,6 +279,24 @@ Service / assertion:      running / true
 
 ## 原子升级
 
+可直接从经过校验的 GitHub Release 升级：
+
+```bash
+sudo remote-mac-keepawake upgrade --system --release latest
+# 也可以固定到准确、已审核的版本：
+sudo remote-mac-keepawake upgrade --system --release 1.4.0
+```
+
+CLI 会通过 HTTPS 下载 release 归档和 `SHA256SUMS`，遇到缺失/不匹配的 checksum
+或不安全归档路径会立即拒绝；候选文件验证后才进行原子替换和健康检查。降级必须
+显式增加 `--allow-downgrade`。如果可选 heartbeat reporter 已安装，经过验证的
+release 会把两个 CLI 作为一个操作同时升级或回滚。本项目不会在后台无人值守
+自动更新。
+
+命令失败时会恢复原来的可执行文件；请先修复提示的服务或网络问题，确认
+`status --json`，再重试固定版本。只有在已审核的恢复版本确实需要降级时才使用
+`--allow-downgrade`。
+
 下载或 clone 已审核的新版本，然后让已安装的 CLI 自行验证并替换：
 
 ```bash
@@ -283,24 +327,25 @@ sudo remote-mac-keepawake uninstall --system
 
 每个语义版本 tag 都会发布：
 
-- 自动生成的 GitHub release notes；
+- 优先使用经过审核的双语 release notes，否则自动生成；
 - GitHub 源码压缩包；
 - 保留可执行权限的项目归档；
 - SPDX 软件物料清单；
 - `SHA256SUMS` 和 GitHub artifact provenance attestations。
 
-校验 v1.3.0 下载文件：
+校验 v1.4.0 下载文件：
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-tar -tzf remote-mac-keepawake-v1.3.0.tar.gz
-gh attestation verify remote-mac-keepawake-v1.3.0.tar.gz \
+tar -tzf remote-mac-keepawake-v1.4.0.tar.gz
+gh attestation verify remote-mac-keepawake-v1.4.0.tar.gz \
   --repo xudaniel/remote-mac-keepawake
 ```
 
 项目归档包括两个 CLI、Mac Pulse Dashboard 源码与 migrations、本中文 README、
 [英文 README](README.md)、[英文 PRD](docs/PRD.en.md) 和
 [中文 PRD](docs/PRD.zh-CN.md)。
+归档还包括两种语言的架构说明和对应版本的 release notes。
 
 ## 支持系统与 CI
 
@@ -314,7 +359,7 @@ CI 检查：
 - 回滚和清理边界；
 - JSON 与 plist 有效性；
 - 可执行权限；
-- Heartbeat reporter 安装、上报、测速缓存和清理；
+- 签名 Heartbeat 安装、密钥轮换、补传、网络诊断、测速缓存和清理；
 - Dashboard lint、构建、路由行为和增量 D1 migrations；
 - 中英文文档与 release 元数据一致性；
 - 真实 LaunchAgent 重启以及恢复后的 `pmset` assertion。

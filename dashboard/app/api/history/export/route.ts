@@ -19,10 +19,16 @@ export async function GET(request: Request) {
     const where = historyWhere(bounds);
     const result = await d1.prepare(`
       SELECT received_at, reported_at, health, service_state, idle_sleep_prevented,
-             power_source, battery_percent, charging, lid_closed, network_checked,
+             power_source, battery_percent, battery_condition, battery_cycle_count,
+             battery_design_capacity_mah, battery_full_charge_capacity_mah,
+             battery_health_percent, thermal_state, charging, lid_closed, network_checked,
              network_available, internet_speed_enabled, internet_download_mbps,
              internet_upload_mbps, internet_latency_ms, internet_responsiveness_rpm,
-             internet_speed_measured_at, chrome_checked, chrome_running, version, mode
+             internet_speed_measured_at, network_diagnostics_enabled,
+             network_route_available, network_gateway_reachable, network_dns_available,
+             network_https_available, network_ingest_reachable, network_gateway_latency_ms,
+             network_gateway_jitter_ms, network_gateway_packet_loss_percent, network_fault,
+             network_diagnostics_measured_at, chrome_checked, chrome_running, version, mode
       FROM health_samples ${where.sql} ORDER BY id ASC LIMIT ?
     `).bind(...where.values, EXPORT_LIMIT + 1).all<Record<string, unknown>>();
     const rows = result.results ?? [];
@@ -30,10 +36,16 @@ export async function GET(request: Request) {
     const exported = rows.slice(0, EXPORT_LIMIT);
     const columns = [
       "received_at", "reported_at", "health", "service_state", "idle_sleep_prevented",
-      "power_source", "battery_percent", "charging", "lid_closed", "network_checked",
+      "power_source", "battery_percent", "battery_condition", "battery_cycle_count",
+      "battery_design_capacity_mah", "battery_full_charge_capacity_mah", "battery_health_percent",
+      "thermal_state", "charging", "lid_closed", "network_checked",
       "network_available", "internet_speed_enabled", "internet_download_mbps",
       "internet_upload_mbps", "internet_latency_ms", "internet_responsiveness_rpm",
-      "internet_speed_measured_at", "chrome_checked", "chrome_running", "version", "mode",
+      "internet_speed_measured_at", "network_diagnostics_enabled", "network_route_available",
+      "network_gateway_reachable", "network_dns_available", "network_https_available",
+      "network_ingest_reachable", "network_gateway_latency_ms", "network_gateway_jitter_ms",
+      "network_gateway_packet_loss_percent", "network_fault", "network_diagnostics_measured_at",
+      "chrome_checked", "chrome_running", "version", "mode",
     ];
     const output = [columns.join(","), ...exported.map((row) => columns.map((column) => csv(row[column])).join(","))].join("\n");
     return new Response(output, {

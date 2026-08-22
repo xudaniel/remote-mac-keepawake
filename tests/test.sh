@@ -6,6 +6,7 @@ set -o pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 readonly REPO_ROOT
 readonly CLI="$REPO_ROOT/bin/remote-mac-keepawake"
+readonly HEARTBEAT="$REPO_ROOT/bin/remote-mac-heartbeat"
 TEST_AREA="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/remote-mac-keepawake-tests.XXXXXX")"
 readonly TEST_AREA
 readonly LABEL="com.xudaniel.remote-mac-keepawake"
@@ -70,7 +71,7 @@ system_cli="$TEST_AREA/usr/local/bin/remote-mac-keepawake"
 
 printf '1. Syntax, version, and help contract\n'
 /bin/bash -n "$CLI" || fail "CLI has invalid shell syntax"
-assert_eq "$(/bin/bash "$CLI" version)" "remote-mac-keepawake 1.3.0"
+assert_eq "$(/bin/bash "$CLI" version)" "remote-mac-keepawake 1.4.0"
 help_output="$(/bin/bash "$CLI" help)"
 assert_contains_text "$help_output" "Health exit codes"
 assert_contains_text "$help_output" "migrate --system --yes"
@@ -155,6 +156,10 @@ default_health="$(run_cli health --system --json)" || fail "Default health faile
 assert_json "$default_health"
 assert_contains_text "$default_health" '"network_checked":0'
 assert_contains_text "$default_health" '"network_available":null'
+assert_contains_text "$default_health" '"battery_condition":"normal"'
+assert_contains_text "$default_health" '"battery_cycle_count":120'
+assert_contains_text "$default_health" '"battery_health_percent":90.0'
+assert_contains_text "$default_health" '"thermal_state":"nominal"'
 degraded_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
   RMKA_TEST_CHROME_RUNNING=false /bin/bash "$CLI" health --system --json --chrome)"
 degraded_rc=$?
@@ -185,6 +190,25 @@ invalid_battery_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
 assert_json "$invalid_battery_output"
 assert_contains_text "$invalid_battery_output" '"battery_percent":null'
 assert_contains_text "$invalid_battery_output" '"charging":null'
+hardware_warning_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_CONDITION=service-recommended RMKA_TEST_THERMAL_STATE=serious \
+  /bin/bash "$CLI" health --system --json)"
+hardware_warning_rc=$?
+assert_eq "$hardware_warning_rc" "2"
+assert_contains_text "$hardware_warning_output" '"battery_condition":"service-recommended"'
+assert_contains_text "$hardware_warning_output" '"thermal_state":"serious"'
+malformed_hardware_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_CYCLE_COUNT=bad RMKA_TEST_BATTERY_HEALTH_PERCENT=bad \
+  RMKA_TEST_THERMAL_STATE=bad /bin/bash "$CLI" health --system --json)" ||
+  fail "Malformed hardware metrics should be normalized"
+assert_contains_text "$malformed_hardware_output" '"battery_cycle_count":null'
+assert_contains_text "$malformed_hardware_output" '"battery_health_percent":null'
+assert_contains_text "$malformed_hardware_output" '"thermal_state":"unknown"'
+malformed_decimal_output="$(RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_TEST_BATTERY_HEALTH_PERCENT='1..2' /bin/bash "$CLI" health --system --json)" ||
+  fail "Malformed decimal battery health should be normalized"
+assert_json "$malformed_decimal_output"
+assert_contains_text "$malformed_decimal_output" '"battery_health_percent":null'
 unavailable_output="$(run_cli_fail_step assertion health --system --json)"
 unavailable_rc=$?
 assert_eq "$unavailable_rc" "1"
@@ -211,7 +235,78 @@ if run_cli_fail_step upgrade_copy upgrade --system --from "$CLI" >/dev/null 2>&1
 fi
 assert_eq "$(/usr/bin/shasum -a 256 "$system_cli" | /usr/bin/awk '{print $1}')" "$cli_hash"
 run_cli upgrade --system --from "$CLI" >/dev/null || fail "Verified upgrade failed"
-assert_eq "$("$system_cli" version)" "remote-mac-keepawake 1.3.0"
+assert_eq "$("$system_cli" version)" "remote-mac-keepawake 1.4.0"
+
+release_fixture="$TEST_AREA/release-fixture"
+release_package="remote-mac-keepawake-v1.4.0"
+/bin/mkdir -p "$release_fixture/$release_package/bin"
+/usr/bin/install -m 0755 "$CLI" "$release_fixture/$release_package/bin/remote-mac-keepawake"
+/usr/bin/install -m 0755 "$HEARTBEAT" "$release_fixture/$release_package/bin/remote-mac-heartbeat"
+/usr/bin/tar -czf "$release_fixture/$release_package.tar.gz" -C "$release_fixture" "$release_package"
+(
+  cd "$release_fixture" || exit 1
+  /usr/bin/shasum -a 256 "$release_package.tar.gz" > SHA256SUMS
+) || fail "Could not prepare release checksum fixture"
+cat > "$release_fixture/curl" <<'EOF'
+#!/bin/bash
+output=""
+url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output) output="$2"; shift ;;
+    http*) url="$1" ;;
+  esac
+  shift
+done
+if [[ "$url" == */releases/latest ]]; then
+  printf '%s\n' 'https://releases.example/releases/tag/v1.4.0'
+elif [[ "$url" == */SHA256SUMS ]]; then
+  if [[ -e "${RMKA_RELEASE_FIXTURE:?}/tamper" ]]; then
+    printf '%064d  remote-mac-keepawake-v1.4.0.tar.gz\n' 0 > "$output"
+  else
+    /bin/cp "$RMKA_RELEASE_FIXTURE/SHA256SUMS" "$output"
+  fi
+elif [[ "$url" == */remote-mac-keepawake-v1.4.0.tar.gz ]]; then
+  /bin/cp "$RMKA_RELEASE_FIXTURE/remote-mac-keepawake-v1.4.0.tar.gz" "$output"
+else
+  exit 22
+fi
+EOF
+/bin/chmod 0755 "$release_fixture/curl"
+installed_reporter="$TEST_AREA/user/.local/bin/remote-mac-heartbeat"
+/usr/bin/install -m 0755 "$HEARTBEAT" "$installed_reporter"
+/usr/bin/sed -i '' 's/readonly VERSION="1.4.0"/readonly VERSION="1.3.0"/' "$installed_reporter"
+RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_RELEASE_BASE_URL=https://releases.example \
+  RMKA_RELEASE_FIXTURE="$release_fixture" RMKA_CURL_BIN="$release_fixture/curl" \
+  /bin/bash "$CLI" upgrade --system --release latest >/dev/null ||
+  fail "Verified release upgrade failed"
+assert_eq "$("$installed_reporter" version)" "remote-mac-heartbeat 1.4.0"
+cli_hash="$(/usr/bin/shasum -a 256 "$system_cli" | /usr/bin/awk '{print $1}')"
+reporter_hash="$(/usr/bin/shasum -a 256 "$installed_reporter" | /usr/bin/awk '{print $1}')"
+if RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 RMKA_TEST_FAIL_STEP=upgrade_reporter_copy \
+  RMKA_RELEASE_BASE_URL=https://releases.example \
+  RMKA_RELEASE_FIXTURE="$release_fixture" RMKA_CURL_BIN="$release_fixture/curl" \
+  /bin/bash "$CLI" upgrade --system --release latest >/dev/null 2>&1; then
+  fail "Interrupted dual-CLI release upgrade was reported as successful"
+fi
+assert_eq "$(/usr/bin/shasum -a 256 "$system_cli" | /usr/bin/awk '{print $1}')" "$cli_hash"
+assert_eq "$(/usr/bin/shasum -a 256 "$installed_reporter" | /usr/bin/awk '{print $1}')" "$reporter_hash"
+printf 'tamper\n' > "$release_fixture/tamper"
+cli_hash="$(/usr/bin/shasum -a 256 "$system_cli" | /usr/bin/awk '{print $1}')"
+if RMKA_TEST_ROOT="$TEST_AREA" RMKA_DRY_RUN=1 \
+  RMKA_RELEASE_BASE_URL=https://releases.example \
+  RMKA_RELEASE_FIXTURE="$release_fixture" RMKA_CURL_BIN="$release_fixture/curl" \
+  /bin/bash "$CLI" upgrade --system --release v1.4.0 >/dev/null 2>&1; then
+  fail "Tampered release checksum was accepted"
+fi
+assert_eq "$(/usr/bin/shasum -a 256 "$system_cli" | /usr/bin/awk '{print $1}')" "$cli_hash"
+downgrade_source="$TEST_AREA/remote-mac-keepawake-1.3.0"
+/bin/cp "$CLI" "$downgrade_source"
+/usr/bin/sed -i '' 's/readonly VERSION="1.4.0"/readonly VERSION="1.3.0"/' "$downgrade_source"
+if run_cli upgrade --system --from "$downgrade_source" >/dev/null 2>&1; then
+  fail "Unsupported downgrade was accepted without --allow-downgrade"
+fi
 
 printf '10. Clean uninstall preserves explicit mode isolation\n'
 run_cli uninstall --system >/dev/null || fail "System uninstall failed"

@@ -6,13 +6,14 @@ set -u
 set -o pipefail
 
 readonly PROGRAM_NAME="remote-mac-heartbeat"
-readonly VERSION="1.3.0"
+readonly VERSION="1.4.0"
 readonly LABEL="com.xudaniel.remote-mac-heartbeat"
 readonly TEST_ROOT="${RMKA_DASH_TEST_ROOT:-}"
 readonly CURL_BIN="${RMKA_DASH_CURL:-/usr/bin/curl}"
 readonly PLUTIL_BIN="${RMKA_DASH_PLUTIL:-/usr/bin/plutil}"
 readonly NETWORK_QUALITY_BIN="${RMKA_DASH_NETWORK_QUALITY:-/usr/bin/networkQuality}"
 readonly UUIDGEN_BIN="${RMKA_DASH_UUIDGEN:-/usr/bin/uuidgen}"
+readonly NICE_BIN="${RMKA_DASH_NICE:-/usr/bin/nice}"
 
 if [[ -n "$TEST_ROOT" ]]; then
   readonly USER_BASE="$TEST_ROOT/user"
@@ -22,10 +23,14 @@ fi
 readonly CONFIG_DIR="$USER_BASE/.config/remote-mac-keepawake/dashboard"
 readonly ENDPOINT_FILE="$CONFIG_DIR/endpoint"
 readonly TOKEN_FILE="$CONFIG_DIR/ingest-token"
+readonly KEY_ID_FILE="$CONFIG_DIR/ingest-key-id"
 readonly SITES_TOKEN_FILE="$CONFIG_DIR/sites-bypass-token"
 readonly MODE_FILE="$CONFIG_DIR/mode"
 readonly SPEED_INTERVAL_FILE="$CONFIG_DIR/internet-speed-interval"
 readonly SPEED_CACHE_FILE="$CONFIG_DIR/internet-speed.json"
+readonly NETWORK_INTERVAL_FILE="$CONFIG_DIR/network-diagnostics-interval"
+readonly NETWORK_CACHE_FILE="$CONFIG_DIR/network-diagnostics.json"
+readonly NETWORK_PROBE_URL_FILE="$CONFIG_DIR/network-probe-url"
 readonly OUTBOX_DIR="$CONFIG_DIR/outbox"
 readonly LAST_SUCCESS_FILE="$CONFIG_DIR/last-success"
 readonly SEND_LOCK_DIR="$CONFIG_DIR/send.lock"
@@ -45,8 +50,13 @@ Publish minimal Remote Mac KeepAwake health heartbeats to Mac Pulse.
 Usage:
   remote-mac-heartbeat install --url HTTPS_URL --token-stdin
                                [--sites-token-stdin] [--user|--system]
+                               [--key-id ID]
                                [--internet-speed]
                                [--speed-test-interval SECONDS]
+                               [--network-diagnostics]
+                               [--network-diagnostics-interval SECONDS]
+                               [--network-probe-url HTTPS_URL]
+  remote-mac-heartbeat rotate-key --key-id ID --token-stdin
   remote-mac-heartbeat send
   remote-mac-heartbeat status
   remote-mac-heartbeat uninstall
@@ -67,6 +77,11 @@ the remote Mac with Apple's built-in networkQuality tool and cached between
 Every sample is written to a private local outbox before upload. Failed
 uploads stay on disk and are replayed automatically after connectivity returns.
 The status command reports the pending sample count and last successful upload.
+
+Every upload is signed with HMAC-SHA-256 over its method, path, transport time,
+sample ID, and exact body digest. Observation time remains unchanged when an
+old outbox sample is replayed. Key rotation replaces the protected local key
+atomically without restarting the reporter.
 EOF
 }
 
@@ -109,6 +124,14 @@ keepawake_cli() {
 
 valid_number() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+valid_key_id() {
+  [[ "$1" =~ ^[a-zA-Z0-9._-]{1,32}$ ]]
+}
+
+valid_probe_url() {
+  [[ "${#1}" -le 512 && "$1" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?/[^[:space:]]*$ ]]
 }
 
 generate_sample_id() {
@@ -207,10 +230,36 @@ record_success() {
 }
 
 upload_payload_file() {
-  local path="$1" endpoint="$2" token="$3" sites_token="$4"
+  local path="$1" endpoint="$2" token="$3" sites_token="$4" key_id="$5"
+  local transport_timestamp="" sample_id="" body_digest="" signature="" endpoint_path=""
+  local canonical_file=""
   local -a curl_headers=()
   [[ -r "$path" ]] || return 1
-  curl_headers=(--header "Authorization: Bearer $token")
+  valid_key_id "$key_id" || return 1
+  sample_id="$("$PLUTIL_BIN" -extract sample_id raw -o - "$path" 2>/dev/null)" || return 1
+  [[ "$sample_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  body_digest="$(/usr/bin/openssl dgst -sha256 "$path" 2>/dev/null | /usr/bin/awk '{print $NF}')" || return 1
+  [[ "$body_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  transport_timestamp="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  endpoint_path="/${endpoint#*://*/}"
+  [[ "$endpoint_path" == */api/heartbeat ]] || return 1
+  canonical_file="$(/usr/bin/mktemp "$CONFIG_DIR/.signature.XXXXXX")" || return 1
+  printf 'POST\n%s\n%s\n%s\n%s' \
+    "$endpoint_path" "$transport_timestamp" "$sample_id" "$body_digest" > "$canonical_file" || {
+    /bin/rm -f "$canonical_file"
+    return 1
+  }
+  signature="$(/usr/bin/openssl dgst -sha256 -hmac "$token" "$canonical_file" 2>/dev/null |
+    /usr/bin/awk '{print $NF}')" || signature=""
+  /bin/rm -f "$canonical_file"
+  [[ "$signature" =~ ^[0-9a-f]{64}$ ]] || return 1
+  curl_headers=(
+    --header "Authorization: Bearer $token"
+    --header "X-Mac-Pulse-Key-Id: $key_id"
+    --header "X-Mac-Pulse-Timestamp: $transport_timestamp"
+    --header "X-Mac-Pulse-Sample-Id: $sample_id"
+    --header "X-Mac-Pulse-Signature: $signature"
+  )
   if [[ -n "$sites_token" ]]; then
     curl_headers+=(--header "OAI-Sites-Authorization: Bearer $sites_token")
   fi
@@ -224,12 +273,12 @@ upload_payload_file() {
 }
 
 replay_outbox() {
-  local current_path="$1" endpoint="$2" token="$3" sites_token="$4"
+  local current_path="$1" endpoint="$2" token="$3" sites_token="$4" key_id="$5"
   local path="" replayed=0
   for path in "$OUTBOX_DIR"/*.json; do
     [[ -f "$path" && "$path" != "$current_path" ]] || continue
     [[ "$replayed" -lt "$MAX_REPLAY_PER_RUN" ]] || break
-    if upload_payload_file "$path" "$endpoint" "$token" "$sites_token"; then
+    if upload_payload_file "$path" "$endpoint" "$token" "$sites_token" "$key_id"; then
       /bin/rm -f "$path" || return 1
       record_success || true
       replayed=$((replayed + 1))
@@ -265,7 +314,7 @@ measure_internet_speed() {
   local download_mbps="" upload_mbps="" measured_at=""
 
   [[ -x "$NETWORK_QUALITY_BIN" ]] || return 1
-  "$NETWORK_QUALITY_BIN" -c -M 20 > "$raw_file" 2>/dev/null || {
+  "$NICE_BIN" -n 10 "$NETWORK_QUALITY_BIN" -c -M 20 > "$raw_file" 2>/dev/null || {
     /bin/rm -f "$raw_file"
     return 1
   }
@@ -296,9 +345,130 @@ append_internet_speed() {
     "$speed_latency_ms" "$speed_responsiveness_rpm" "$measured_json"
 }
 
+read_network_cache() {
+  local boolean_value=""
+  network_route_available="null"
+  network_gateway_reachable="null"
+  network_dns_available="null"
+  network_https_available="null"
+  network_ingest_reachable="null"
+  network_gateway_latency_ms="null"
+  network_gateway_jitter_ms="null"
+  network_gateway_packet_loss_percent="null"
+  network_fault="unknown"
+  network_measured_at=""
+  [[ -r "$NETWORK_CACHE_FILE" ]] || return 1
+
+  network_route_available="$("$PLUTIL_BIN" -extract route_available raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_gateway_reachable="$("$PLUTIL_BIN" -extract gateway_reachable raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_dns_available="$("$PLUTIL_BIN" -extract dns_available raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_https_available="$("$PLUTIL_BIN" -extract https_available raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_ingest_reachable="$("$PLUTIL_BIN" -extract ingest_reachable raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_gateway_latency_ms="$("$PLUTIL_BIN" -extract gateway_latency_ms raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_gateway_jitter_ms="$("$PLUTIL_BIN" -extract gateway_jitter_ms raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_gateway_packet_loss_percent="$("$PLUTIL_BIN" -extract gateway_packet_loss_percent raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_fault="$("$PLUTIL_BIN" -extract fault raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  network_measured_at="$("$PLUTIL_BIN" -extract measured_at raw -o - "$NETWORK_CACHE_FILE" 2>/dev/null)" || return 1
+  for boolean_value in "$network_route_available" "$network_gateway_reachable" \
+    "$network_dns_available" "$network_https_available" "$network_ingest_reachable"; do
+    [[ "$boolean_value" == "true" || "$boolean_value" == "false" ]] || return 1
+  done
+  valid_number "$network_gateway_latency_ms" && valid_number "$network_gateway_jitter_ms" &&
+    valid_number "$network_gateway_packet_loss_percent" || return 1
+  case "$network_fault" in none|local-network|dns|internet|dashboard-ingest|unknown) ;; *) return 1 ;; esac
+  [[ "$network_measured_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+}
+
+measure_network_diagnostics() {
+  local endpoint="$1" probe_url="$2" cache_tmp="$NETWORK_CACHE_FILE.tmp.$$" route_output="" gateway=""
+  local probe_host=""
+  local ping_output="" ping_values="" measured_at=""
+  local route_available="false" gateway_reachable="false" dns_available="false"
+  local https_available="false" ingest_reachable="false"
+  local gateway_latency_ms="0.0" gateway_jitter_ms="0.0" gateway_packet_loss_percent="100.0"
+  local fault="unknown"
+
+  if [[ -n "$TEST_ROOT" ]]; then
+    route_available="${RMKA_TEST_ROUTE_AVAILABLE:-true}"
+    gateway_reachable="${RMKA_TEST_GATEWAY_REACHABLE:-true}"
+    dns_available="${RMKA_TEST_DNS_AVAILABLE:-true}"
+    https_available="${RMKA_TEST_HTTPS_AVAILABLE:-true}"
+    ingest_reachable="${RMKA_TEST_INGEST_REACHABLE:-true}"
+    gateway_latency_ms="${RMKA_TEST_GATEWAY_LATENCY_MS:-2.0}"
+    gateway_jitter_ms="${RMKA_TEST_GATEWAY_JITTER_MS:-0.4}"
+    gateway_packet_loss_percent="${RMKA_TEST_GATEWAY_PACKET_LOSS_PERCENT:-0.0}"
+  else
+    valid_probe_url "$probe_url" || return 1
+    probe_host="${probe_url#https://}"
+    probe_host="${probe_host%%/*}"
+    probe_host="${probe_host%%:*}"
+    route_output="$(/sbin/route -n get default 2>/dev/null || true)"
+    gateway="$(printf '%s\n' "$route_output" | /usr/bin/awk '/gateway:/{print $2; exit}')"
+    [[ -n "$gateway" ]] && route_available="true"
+    if [[ "$route_available" == "true" ]]; then
+      ping_output="$("$NICE_BIN" -n 10 /sbin/ping -c 4 -W 1000 "$gateway" 2>/dev/null || true)"
+      gateway_packet_loss_percent="$(printf '%s\n' "$ping_output" |
+        /usr/bin/sed -n 's/.* \([0-9][0-9.]*\)% packet loss.*/\1/p' | /usr/bin/head -n 1)"
+      ping_values="$(printf '%s\n' "$ping_output" |
+        /usr/bin/awk -F'= ' '/round-trip.*stddev/{print $2; exit}')"
+      if [[ -n "$ping_values" ]]; then
+        gateway_latency_ms="$(printf '%s\n' "$ping_values" | /usr/bin/awk -F/ '{print $2}')"
+        gateway_jitter_ms="$(printf '%s\n' "$ping_values" | /usr/bin/awk -F/ '{gsub(/ .*/, "", $4); print $4}')"
+        gateway_reachable="true"
+      fi
+      [[ -n "$gateway_packet_loss_percent" ]] || gateway_packet_loss_percent="100.0"
+    fi
+    if "$NICE_BIN" -n 10 /usr/bin/dscacheutil -q host -a name "$probe_host" 2>/dev/null |
+      /usr/bin/grep -q '^ip_address:'; then
+      dns_available="true"
+    fi
+    if "$NICE_BIN" -n 10 "$CURL_BIN" --silent --output /dev/null --connect-timeout 5 --max-time 10 \
+      "$probe_url"; then
+      https_available="true"
+    fi
+    if "$NICE_BIN" -n 10 "$CURL_BIN" --silent --output /dev/null --connect-timeout 5 --max-time 10 \
+      --request HEAD "$endpoint"; then
+      ingest_reachable="true"
+    fi
+  fi
+
+  valid_number "$gateway_latency_ms" || gateway_latency_ms="0.0"
+  valid_number "$gateway_jitter_ms" || gateway_jitter_ms="0.0"
+  valid_number "$gateway_packet_loss_percent" || gateway_packet_loss_percent="100.0"
+  if [[ "$route_available" != "true" || "$gateway_reachable" != "true" ]]; then
+    fault="local-network"
+  elif [[ "$dns_available" != "true" ]]; then
+    fault="dns"
+  elif [[ "$https_available" != "true" ]]; then
+    fault="internet"
+  elif [[ "$ingest_reachable" != "true" ]]; then
+    fault="dashboard-ingest"
+  else
+    fault="none"
+  fi
+  measured_at="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '{"route_available":%s,"gateway_reachable":%s,"dns_available":%s,"https_available":%s,"ingest_reachable":%s,"gateway_latency_ms":%s,"gateway_jitter_ms":%s,"gateway_packet_loss_percent":%s,"fault":"%s","measured_at":"%s"}\n' \
+    "$route_available" "$gateway_reachable" "$dns_available" "$https_available" "$ingest_reachable" \
+    "$gateway_latency_ms" "$gateway_jitter_ms" "$gateway_packet_loss_percent" "$fault" "$measured_at" > "$cache_tmp" || return 1
+  /bin/chmod 0600 "$cache_tmp" || return 1
+  /bin/mv -f "$cache_tmp" "$NETWORK_CACHE_FILE" || return 1
+}
+
+append_network_diagnostics() {
+  local payload="$1" enabled="$2" measured_json="null"
+  [[ -n "$network_measured_at" ]] && measured_json="\"$network_measured_at\""
+  printf '%s,"network_diagnostics_enabled":%s,"network_route_available":%s,"network_gateway_reachable":%s,"network_dns_available":%s,"network_https_available":%s,"network_ingest_reachable":%s,"network_gateway_latency_ms":%s,"network_gateway_jitter_ms":%s,"network_gateway_packet_loss_percent":%s,"network_fault":"%s","network_diagnostics_measured_at":%s}\n' \
+    "${payload%\}}" "$enabled" "$network_route_available" "$network_gateway_reachable" \
+    "$network_dns_available" "$network_https_available" "$network_ingest_reachable" \
+    "$network_gateway_latency_ms" "$network_gateway_jitter_ms" \
+    "$network_gateway_packet_loss_percent" "$network_fault" "$measured_json"
+}
+
 send_heartbeat() {
-  local endpoint="" token="" sites_token="" cli="" mode="" payload="" health_rc=0
+  local endpoint="" token="" sites_token="" key_id="" cli="" mode="" payload="" health_rc=0
   local speed_interval="0" speed_enabled="false" now_epoch=0 cache_epoch=0
+  local network_interval="0" network_enabled="false" network_cache_epoch=0
+  local network_probe_url="https://www.apple.com/library/test/success.html"
   local current_path="" replayed=0 pending=0 accepted_at="" sample_id=""
   local -a health_args=()
   if ! [[ "$MAX_REPLAY_PER_RUN" =~ ^[0-9]+$ ]] ||
@@ -307,6 +477,8 @@ send_heartbeat() {
   fi
   endpoint="$(read_config_line "$ENDPOINT_FILE")" || die "Heartbeat endpoint is not configured."
   token="$(read_config_line "$TOKEN_FILE")" || die "Ingest token is not configured."
+  key_id="$(read_config_line "$KEY_ID_FILE")" || key_id="current"
+  valid_key_id "$key_id" || die "Configured ingest key ID is invalid."
   sites_token="$(read_config_line "$SITES_TOKEN_FILE")" || sites_token=""
   mode="$(config_mode)" || die "Configured mode is invalid."
   cli="$(keepawake_cli)"
@@ -332,6 +504,34 @@ send_heartbeat() {
     fi
   fi
 
+  network_interval="$(read_config_line "$NETWORK_INTERVAL_FILE")" || network_interval="0"
+  network_probe_url="$(read_config_line "$NETWORK_PROBE_URL_FILE")" ||
+    network_probe_url="https://www.apple.com/library/test/success.html"
+  valid_probe_url "$network_probe_url" || die "Configured network probe URL is invalid."
+  [[ "$network_interval" =~ ^[0-9]+$ ]] || network_interval="0"
+  if [[ "$network_interval" -ge 300 ]]; then
+    network_enabled="true"
+    now_epoch="$(/bin/date '+%s')"
+    if [[ -r "$NETWORK_CACHE_FILE" ]]; then
+      network_cache_epoch="$(/usr/bin/stat -f '%m' "$NETWORK_CACHE_FILE" 2>/dev/null)" || network_cache_epoch=0
+    fi
+    if [[ "$network_cache_epoch" -eq 0 || $((now_epoch - network_cache_epoch)) -ge "$network_interval" ]]; then
+      measure_network_diagnostics "$endpoint" "$network_probe_url" || true
+    fi
+    read_network_cache || true
+  else
+    network_route_available="null"
+    network_gateway_reachable="null"
+    network_dns_available="null"
+    network_https_available="null"
+    network_ingest_reachable="null"
+    network_gateway_latency_ms="null"
+    network_gateway_jitter_ms="null"
+    network_gateway_packet_loss_percent="null"
+    network_fault="unknown"
+    network_measured_at=""
+  fi
+
   payload="$("$cli" "${health_args[@]}" 2>/dev/null)" || health_rc=$?
   [[ -n "$payload" && "$payload" == \{* ]] || die "KeepAwake did not return health JSON."
   [[ "${#payload}" -le 16384 ]] || die "KeepAwake health JSON is unexpectedly large."
@@ -352,12 +552,13 @@ send_heartbeat() {
   fi
   sample_id="$(generate_sample_id)" || die "Could not generate a heartbeat sample ID."
   payload="$(append_internet_speed "$payload" "$speed_enabled" "$sample_id")"
+  payload="$(append_network_diagnostics "$payload" "$network_enabled")"
   current_path="$(queue_payload "$payload" "$sample_id")" ||
     die "Could not queue the heartbeat sample."
 
-  replayed="$(replay_outbox "$current_path" "$endpoint" "$token" "$sites_token")" ||
+  replayed="$(replay_outbox "$current_path" "$endpoint" "$token" "$sites_token" "$key_id")" ||
     replayed=0
-  if upload_payload_file "$current_path" "$endpoint" "$token" "$sites_token"; then
+  if upload_payload_file "$current_path" "$endpoint" "$token" "$sites_token" "$key_id"; then
     /bin/rm -f "$current_path" ||
       die "Heartbeat was accepted but could not be removed from the outbox."
     record_success || true
@@ -373,8 +574,11 @@ send_heartbeat() {
 }
 
 install_agent() {
-  local endpoint="$1" token="$2" sites_token="$3" mode="$4" speed_interval="$5" tmp_plist=""
+  local endpoint="$1" token="$2" sites_token="$3" mode="$4" speed_interval="$5"
+  local key_id="$6" network_interval="$7" probe_url="$8" tmp_plist=""
   [[ -n "$token" ]] || die "The ingest token cannot be empty."
+  valid_key_id "$key_id" || die "--key-id must contain 1-32 letters, numbers, dots, dashes, or underscores."
+  valid_probe_url "$probe_url" || die "--network-probe-url must be an HTTPS URL with a DNS hostname."
   if [[ "${RMKA_DASH_ALLOW_HTTP:-0}" != "1" ]]; then
     [[ "$endpoint" == https://*/api/heartbeat ]] ||
       die "--url must use HTTPS and end with /api/heartbeat."
@@ -387,6 +591,7 @@ install_agent() {
   /usr/bin/install -m 0755 "$0" "$INSTALLED_CLI" || die "Could not install the heartbeat command."
   printf '%s\n' "$endpoint" > "$ENDPOINT_FILE" || die "Could not store the endpoint."
   printf '%s\n' "$token" > "$TOKEN_FILE" || die "Could not store the ingest token."
+  printf '%s\n' "$key_id" > "$KEY_ID_FILE" || die "Could not store the ingest key ID."
   if [[ -n "$sites_token" ]]; then
     printf '%s\n' "$sites_token" > "$SITES_TOKEN_FILE" ||
       die "Could not store the Sites bypass token."
@@ -395,8 +600,12 @@ install_agent() {
   fi
   printf '%s\n' "$mode" > "$MODE_FILE" || die "Could not store the monitoring mode."
   printf '%s\n' "$speed_interval" > "$SPEED_INTERVAL_FILE" || die "Could not store the speed-test interval."
+  printf '%s\n' "$network_interval" > "$NETWORK_INTERVAL_FILE" || die "Could not store the network-diagnostics interval."
+  printf '%s\n' "$probe_url" > "$NETWORK_PROBE_URL_FILE" || die "Could not store the network probe URL."
   [[ "$speed_interval" -ge 1800 ]] || /bin/rm -f "$SPEED_CACHE_FILE"
-  /bin/chmod 0600 "$ENDPOINT_FILE" "$TOKEN_FILE" "$MODE_FILE" "$SPEED_INTERVAL_FILE" ||
+  [[ "$network_interval" -ge 300 ]] || /bin/rm -f "$NETWORK_CACHE_FILE"
+  /bin/chmod 0600 "$ENDPOINT_FILE" "$TOKEN_FILE" "$KEY_ID_FILE" "$MODE_FILE" \
+    "$SPEED_INTERVAL_FILE" "$NETWORK_INTERVAL_FILE" "$NETWORK_PROBE_URL_FILE" ||
     die "Could not protect heartbeat configuration."
   [[ ! -e "$SITES_TOKEN_FILE" ]] || /bin/chmod 0600 "$SITES_TOKEN_FILE" ||
     die "Could not protect the Sites bypass token."
@@ -432,11 +641,17 @@ EOF
   else
     printf 'Internet speed sampling is disabled.\n'
   fi
+  if [[ "$network_interval" -ge 300 ]]; then
+    printf 'Network fault isolation is enabled every %s seconds.\n' "$network_interval"
+  else
+    printf 'Network fault isolation is disabled.\n'
+  fi
 }
 
 status_agent() {
   local configured="false" loaded="false" mode="unknown" private_auth="false"
   local speed_interval="0" speed_enabled="false" speed_measured_at=""
+  local network_interval="0" network_enabled="false" network_measured_at="" key_id=""
   local pending_samples=0 last_success_at=""
   [[ -s "$ENDPOINT_FILE" && -s "$TOKEN_FILE" && -s "$MODE_FILE" ]] && configured="true"
   mode="$(config_mode 2>/dev/null)" || mode="unknown"
@@ -444,8 +659,15 @@ status_agent() {
   speed_interval="$(read_config_line "$SPEED_INTERVAL_FILE")" || speed_interval="0"
   [[ "$speed_interval" =~ ^[0-9]+$ ]] || speed_interval="0"
   [[ "$speed_interval" -ge 1800 ]] && speed_enabled="true"
+  key_id="$(read_config_line "$KEY_ID_FILE")" || key_id="current"
+  network_interval="$(read_config_line "$NETWORK_INTERVAL_FILE")" || network_interval="0"
+  [[ "$network_interval" =~ ^[0-9]+$ ]] || network_interval="0"
+  [[ "$network_interval" -ge 300 ]] && network_enabled="true"
   if [[ "$speed_enabled" == "true" ]]; then
     read_speed_cache || true
+  fi
+  if [[ "$network_enabled" == "true" ]]; then
+    read_network_cache || true
   fi
   if [[ -n "$TEST_ROOT" ]]; then
     [[ -s "$PLIST_PATH" ]] && loaded="true"
@@ -454,10 +676,72 @@ status_agent() {
   fi
   pending_samples="$(outbox_count)"
   last_success_at="$(read_config_line "$LAST_SUCCESS_FILE" 2>/dev/null)" || last_success_at=""
-  printf '{"version":"%s","configured":%s,"launch_agent_loaded":%s,"private_sites_auth":%s,"mode":"%s","interval_seconds":60,"pending_samples":%s,"last_success_at":"%s","internet_speed_enabled":%s,"internet_speed_interval_seconds":%s,"internet_speed_measured_at":"%s"}\n' \
-    "$VERSION" "$configured" "$loaded" "$private_auth" "$mode" "$pending_samples" \
-    "$last_success_at" "$speed_enabled" "$speed_interval" "$speed_measured_at"
+  printf '{"version":"%s","configured":%s,"launch_agent_loaded":%s,"private_sites_auth":%s,"mode":"%s","key_id":"%s","signed_heartbeats":true,"interval_seconds":60,"pending_samples":%s,"last_success_at":"%s","internet_speed_enabled":%s,"internet_speed_interval_seconds":%s,"internet_speed_measured_at":"%s","network_diagnostics_enabled":%s,"network_diagnostics_interval_seconds":%s,"network_diagnostics_measured_at":"%s"}\n' \
+    "$VERSION" "$configured" "$loaded" "$private_auth" "$mode" "$key_id" \
+    "$pending_samples" "$last_success_at" "$speed_enabled" "$speed_interval" "$speed_measured_at" \
+    "$network_enabled" "$network_interval" "$network_measured_at"
   [[ "$configured" == "true" && "$loaded" == "true" ]]
+}
+
+rotate_key() {
+  local new_token="$1" new_key_id="$2" token_tmp="" key_tmp=""
+  local token_backup="" key_backup="" had_key_id="false"
+  [[ -s "$ENDPOINT_FILE" && -s "$TOKEN_FILE" ]] || die "Install the heartbeat reporter before rotating its key."
+  [[ -n "$new_token" ]] || die "The ingest token cannot be empty."
+  valid_key_id "$new_key_id" || die "--key-id must contain 1-32 letters, numbers, dots, dashes, or underscores."
+  acquire_send_lock
+  token_tmp="$(/usr/bin/mktemp "$CONFIG_DIR/.ingest-token.XXXXXX")" || die "Could not stage the new token."
+  key_tmp="$(/usr/bin/mktemp "$CONFIG_DIR/.ingest-key-id.XXXXXX")" || {
+    /bin/rm -f "$token_tmp"
+    die "Could not stage the new key ID."
+  }
+  token_backup="$(/usr/bin/mktemp "$CONFIG_DIR/.ingest-token-backup.XXXXXX")" || {
+    /bin/rm -f "$token_tmp" "$key_tmp"
+    die "Could not back up the current token."
+  }
+  key_backup="$(/usr/bin/mktemp "$CONFIG_DIR/.ingest-key-id-backup.XXXXXX")" || {
+    /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup"
+    die "Could not back up the current key ID."
+  }
+  /bin/cp "$TOKEN_FILE" "$token_backup" || {
+    /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup" "$key_backup"
+    die "Could not back up the current token."
+  }
+  if [[ -s "$KEY_ID_FILE" ]]; then
+    had_key_id="true"
+    /bin/cp "$KEY_ID_FILE" "$key_backup" || {
+      /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup" "$key_backup"
+      die "Could not back up the current key ID."
+    }
+  fi
+  printf '%s\n' "$new_token" > "$token_tmp" || {
+    /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup" "$key_backup"
+    die "Could not stage the new token."
+  }
+  printf '%s\n' "$new_key_id" > "$key_tmp" || {
+    /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup" "$key_backup"
+    die "Could not stage the new key ID."
+  }
+  /bin/chmod 0600 "$token_tmp" "$key_tmp" "$token_backup" "$key_backup" ||
+    {
+      /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup" "$key_backup"
+      die "Could not protect the staged key."
+    }
+  /bin/mv -f "$token_tmp" "$TOKEN_FILE" || {
+    /bin/rm -f "$token_tmp" "$key_tmp" "$token_backup" "$key_backup"
+    die "Could not activate the new token."
+  }
+  if ! /bin/mv -f "$key_tmp" "$KEY_ID_FILE"; then
+    /bin/mv -f "$token_backup" "$TOKEN_FILE" || true
+    if [[ "$had_key_id" == "true" ]]; then
+      /bin/mv -f "$key_backup" "$KEY_ID_FILE" || true
+    else
+      /bin/rm -f "$KEY_ID_FILE"
+    fi
+    die "Could not activate the new key ID; the previous signing key was restored."
+  fi
+  /bin/rm -f "$token_backup" "$key_backup"
+  printf 'Activated heartbeat signing key ID %s without restarting the reporter.\n' "$new_key_id"
 }
 
 uninstall_agent() {
@@ -465,7 +749,8 @@ uninstall_agent() {
     /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$LABEL" >/dev/null 2>&1 || true
   fi
   /bin/rm -f "$PLIST_PATH" "$INSTALLED_CLI" "$ENDPOINT_FILE" "$TOKEN_FILE" \
-    "$SITES_TOKEN_FILE" "$MODE_FILE" "$SPEED_INTERVAL_FILE" "$SPEED_CACHE_FILE"
+    "$KEY_ID_FILE" "$SITES_TOKEN_FILE" "$MODE_FILE" "$SPEED_INTERVAL_FILE" "$SPEED_CACHE_FILE" \
+    "$NETWORK_INTERVAL_FILE" "$NETWORK_CACHE_FILE" "$NETWORK_PROBE_URL_FILE"
   /bin/rmdir "$CONFIG_DIR" >/dev/null 2>&1 || true
   printf 'Removed the heartbeat agent and its private credentials. Logs and queued samples were preserved in %s and %s\n' \
     "$LOG_DIR" "$OUTBOX_DIR"
@@ -478,6 +763,9 @@ mode="user"
 token_stdin=0
 sites_token_stdin=0
 speed_test_interval=0
+network_diagnostics_interval=0
+network_probe_url="https://www.apple.com/library/test/success.html"
+key_id="current"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -488,14 +776,37 @@ while [[ $# -gt 0 ]]; do
       ;;
     --token-stdin) token_stdin=1 ;;
     --sites-token-stdin) sites_token_stdin=1 ;;
+    --key-id)
+      [[ $# -ge 2 ]] || die "--key-id requires a value."
+      key_id="$2"
+      valid_key_id "$key_id" || die "--key-id must contain 1-32 letters, numbers, dots, dashes, or underscores."
+      shift
+      ;;
     --internet-speed)
       [[ "$speed_test_interval" -ge 1800 ]] || speed_test_interval=21600
+      [[ "$network_diagnostics_interval" -ge 300 ]] || network_diagnostics_interval=300
       ;;
     --speed-test-interval)
       [[ $# -ge 2 ]] || die "--speed-test-interval requires a value."
       [[ "$2" =~ ^[0-9]+$ ]] || die "--speed-test-interval must be an integer number of seconds."
       [[ "$2" -ge 1800 && "$2" -le 86400 ]] || die "--speed-test-interval must be between 1800 and 86400 seconds."
       speed_test_interval="$2"
+      shift
+      ;;
+    --network-diagnostics)
+      [[ "$network_diagnostics_interval" -ge 300 ]] || network_diagnostics_interval=300
+      ;;
+    --network-diagnostics-interval)
+      [[ $# -ge 2 ]] || die "--network-diagnostics-interval requires a value."
+      [[ "$2" =~ ^[0-9]+$ ]] || die "--network-diagnostics-interval must be an integer number of seconds."
+      [[ "$2" -ge 300 && "$2" -le 86400 ]] || die "--network-diagnostics-interval must be between 300 and 86400 seconds."
+      network_diagnostics_interval="$2"
+      shift
+      ;;
+    --network-probe-url)
+      [[ $# -ge 2 ]] || die "--network-probe-url requires a value."
+      valid_probe_url "$2" || die "--network-probe-url must be an HTTPS URL with a DNS hostname."
+      network_probe_url="$2"
       shift
       ;;
     --user) mode="user" ;;
@@ -524,7 +835,17 @@ case "$command_name" in
       fi
       [[ -n "$sites_bypass_token" ]] || die "The Sites bypass token cannot be empty."
     fi
-    install_agent "$endpoint" "${ingest_token:-}" "$sites_bypass_token" "$mode" "$speed_test_interval"
+    install_agent "$endpoint" "${ingest_token:-}" "$sites_bypass_token" "$mode" \
+      "$speed_test_interval" "$key_id" "$network_diagnostics_interval" "$network_probe_url"
+    ;;
+  rotate-key)
+    [[ "$token_stdin" == "1" ]] || die "rotate-key requires --token-stdin."
+    if [[ -t 0 ]]; then
+      IFS= read -rs ingest_token || true
+    else
+      IFS= read -r ingest_token || true
+    fi
+    rotate_key "${ingest_token:-}" "$key_id"
     ;;
   send) send_heartbeat ;;
   status) status_agent ;;
