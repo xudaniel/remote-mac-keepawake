@@ -14,6 +14,7 @@ test("ships a self-contained bilingual GitHub Pages app", async () => {
   assert.match(html, /Mac Pulse — Live Remote Mac Monitor/);
   assert.match(html, /Public demo/);
   assert.match(html, /synthetic/);
+  assert.match(html, /id="battery-data-kind">Synthetic data/);
   assert.match(html, /Connect private data/);
   assert.match(html, /Never enter the heartbeat ingest\/signing key/);
   assert.match(html, /class="skip-link"/);
@@ -25,6 +26,8 @@ test("ships a self-contained bilingual GitHub Pages app", async () => {
   assert.match(css, /prefers-reduced-motion/);
   assert.match(script, /zh:/);
   assert.match(script, /Private live data/);
+  assert.match(script, /REFRESH_INTERVAL_MS = 60_000/);
+  assert.doesNotMatch(script, /REFRESH_INTERVAL_MS = 10_000|every 10 seconds|每 10 秒/);
   const parsed = JSON.parse(manifest);
   assert.equal(parsed.display, "standalone");
   assert.equal(parsed.start_url, "./");

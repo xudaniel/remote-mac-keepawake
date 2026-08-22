@@ -23,7 +23,8 @@ no analytics or third-party scripts, and never adds credentials to a URL. An
 optional hosting access token can be sent in `OAI-Sites-Authorization` when the
 edge layer supports authenticated cross-origin preflight. Never enter the
 heartbeat ingest/signing key in the public viewer. Use a trusted browser and
-disconnect when finished.
+disconnect when finished. The viewer fetches connected data once per minute,
+matching the default heartbeat cadence.
 
 ## What the dashboard shows
 

@@ -16,7 +16,7 @@ GitHub Pages 应用默认进入明确标记的合成数据演示模式。它也�
 授权的 Mac Pulse API，且不会把密钥提交到仓库或放入 URL。查看凭据只保存在
 当前标签页的 `sessionStorage`；绝不能在这里输入心跳上传或签名密钥。私有面板
 必须先把 `PUBLIC_VIEWER_ORIGIN` 明确设置为 `https://xudaniel.github.io`，连接
-模式才能工作。
+模式才能工作。连接后的数据每分钟刷新一次，与 reporter 的心跳频率一致。
 
 ![Mac Pulse 合成数据面板预览](docs/assets/mac-pulse-synthetic.svg)
 
