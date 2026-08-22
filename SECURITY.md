@@ -19,8 +19,19 @@ other private machine data in a public issue.
   state, PID, and sleep assertion before reporting success.
 - Health diagnostics remain local by default. Internet checks, local
   notifications, and webhooks require explicit flags.
+- Mac Pulse heartbeats are HMAC-SHA-256 signed over the request method, path,
+  transport timestamp, sample ID, and body digest. Production enforces a
+  five-minute replay window and supports current/next/previous rotation slots.
+- Authentication failure throttling stores only a hashed key bucket and time;
+  it does not retain the source IP address. Bearer-only ingestion is a disabled
+  migration compatibility path, not the production default.
+- Reporter credentials and caches use mode-`0600` files in a mode-`0700`
+  directory. Status output and logs never print signing tokens.
 - Webhooks require HTTPS and receive only the service name, health state, and
   install mode. Treat webhook URLs as secrets and do not commit them.
+- `upgrade --release` requires HTTPS, validates the selected archive against
+  `SHA256SUMS`, rejects unsafe archive paths, and rolls back a failed health
+  check. It does not run automatically in the background.
 - Release archives include SHA-256 checksums; CI action references are pinned
   to reviewed commit SHAs.
 - Releases include an SPDX software bill of materials and GitHub artifact

@@ -7,11 +7,14 @@ set -u
 set -o pipefail
 
 readonly PROGRAM_NAME="remote-mac-keepawake"
-readonly VERSION="1.3.0"
+readonly VERSION="1.4.0"
 readonly LABEL="com.xudaniel.remote-mac-keepawake"
 readonly TEST_ROOT="${RMKA_TEST_ROOT:-}"
 readonly DRY_RUN="${RMKA_DRY_RUN:-0}"
 readonly FAIL_STEP="${RMKA_TEST_FAIL_STEP:-}"
+readonly RELEASE_REPOSITORY="xudaniel/remote-mac-keepawake"
+readonly RELEASE_BASE_URL="${RMKA_RELEASE_BASE_URL:-https://github.com/$RELEASE_REPOSITORY}"
+readonly CURL_BIN="${RMKA_CURL_BIN:-/usr/bin/curl}"
 
 resolve_managed_user() {
   if [[ -n "$TEST_ROOT" ]]; then
@@ -79,7 +82,8 @@ Usage:
                               [--chrome] [--watch] [--interval SECONDS]
                               [--notify] [--webhook HTTPS_URL]
   remote-mac-keepawake doctor|logs|self-test [--user|--system]
-  remote-mac-keepawake upgrade [--user|--system] --from PATH
+  remote-mac-keepawake upgrade [--user|--system] (--from PATH|--release latest|VERSION)
+                               [--allow-downgrade]
   remote-mac-keepawake version
 
 Modes:
@@ -122,6 +126,21 @@ json_escape() {
     -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
 }
 
+json_nullable_string() {
+  if [[ "$1" == "null" ]]; then
+    printf 'null'
+  else
+    printf '"%s"' "$(json_escape "$1")"
+  fi
+}
+
+normalize_nonnegative_integer() {
+  case "$1" in
+    ''|*[!0-9]*) printf 'null\n' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 charging_state_from_battery_output() {
   local battery_output="$1"
   if printf '%s\n' "$battery_output" |
@@ -147,6 +166,8 @@ interval=60
 webhook_url=""
 confirmed=0
 upgrade_from=""
+upgrade_release=""
+allow_downgrade=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -164,13 +185,15 @@ while [[ $# -gt 0 ]]; do
     --chrome) check_chrome=1 ;;
     --notify) local_notify=1 ;;
     --yes) confirmed=1 ;;
-    --interval|--webhook|--from)
+    --allow-downgrade) allow_downgrade=1 ;;
+    --interval|--webhook|--from|--release)
       option="$1"
       [[ $# -ge 2 ]] || die "$option requires a value."
       case "$option" in
         --interval) interval="$2" ;;
         --webhook) webhook_url="$2" ;;
         --from) upgrade_from="$2" ;;
+        --release) upgrade_release="$2" ;;
       esac
       shift
       ;;
@@ -527,10 +550,18 @@ status_service() {
 
 collect_health() {
   local battery_output=""
+  local battery_ioreg=""
+  local thermal_output=""
   local lid_output=""
   collect_status
   health_power_source="unknown"
   health_battery_percent="null"
+  health_battery_condition="null"
+  health_battery_cycle_count="null"
+  health_battery_design_capacity_mah="null"
+  health_battery_full_charge_capacity_mah="null"
+  health_battery_health_percent="null"
+  health_thermal_state="unknown"
   health_charging="null"
   health_lid_closed="null"
   health_network_available="null"
@@ -539,6 +570,12 @@ collect_health() {
   if [[ "$DRY_RUN" == "1" ]]; then
     health_power_source="AC Power"
     health_battery_percent="${RMKA_TEST_BATTERY_PERCENT:-100}"
+    health_battery_condition="${RMKA_TEST_BATTERY_CONDITION:-normal}"
+    health_battery_cycle_count="${RMKA_TEST_BATTERY_CYCLE_COUNT:-120}"
+    health_battery_design_capacity_mah="${RMKA_TEST_BATTERY_DESIGN_CAPACITY_MAH:-6000}"
+    health_battery_full_charge_capacity_mah="${RMKA_TEST_BATTERY_FULL_CHARGE_CAPACITY_MAH:-5400}"
+    health_battery_health_percent="${RMKA_TEST_BATTERY_HEALTH_PERCENT:-90.0}"
+    health_thermal_state="${RMKA_TEST_THERMAL_STATE:-nominal}"
     health_charging="${RMKA_TEST_CHARGING:-true}"
     health_lid_closed="${RMKA_TEST_LID_CLOSED:-false}"
     [[ "$check_network" == "1" ]] &&
@@ -559,6 +596,53 @@ collect_health() {
     if [[ "$health_charging" == "null" && "$health_battery_percent" != "null" &&
           "$health_power_source" == "Battery Power" ]]; then
       health_charging="false"
+    fi
+    battery_ioreg="$(/usr/sbin/ioreg -r -c AppleSmartBattery -d 1 2>/dev/null || true)"
+    health_battery_cycle_count="$(printf '%s\n' "$battery_ioreg" |
+      /usr/bin/sed -n 's/.*"CycleCount" = \([0-9][0-9]*\).*/\1/p' |
+      /usr/bin/head -n 1)"
+    health_battery_design_capacity_mah="$(printf '%s\n' "$battery_ioreg" |
+      /usr/bin/sed -n 's/.*"DesignCapacity" = \([0-9][0-9]*\).*/\1/p' |
+      /usr/bin/head -n 1)"
+    health_battery_full_charge_capacity_mah="$(printf '%s\n' "$battery_ioreg" |
+      /usr/bin/sed -n 's/.*"AppleRawMaxCapacity" = \([0-9][0-9]*\).*/\1/p' |
+      /usr/bin/head -n 1)"
+    if [[ -z "$health_battery_full_charge_capacity_mah" ]]; then
+      health_battery_full_charge_capacity_mah="$(printf '%s\n' "$battery_ioreg" |
+        /usr/bin/sed -n 's/.*"MaxCapacity" = \([0-9][0-9]*\).*/\1/p' |
+        /usr/bin/head -n 1)"
+    fi
+    health_battery_cycle_count="$(normalize_nonnegative_integer "$health_battery_cycle_count")"
+    health_battery_design_capacity_mah="$(normalize_nonnegative_integer "$health_battery_design_capacity_mah")"
+    health_battery_full_charge_capacity_mah="$(normalize_nonnegative_integer "$health_battery_full_charge_capacity_mah")"
+    if printf '%s\n' "$battery_ioreg" | /usr/bin/grep -Eiq \
+      'Service Recommended|PermanentFailureStatus" = [1-9]|BatteryHealth" = "Poor'; then
+      health_battery_condition="service-recommended"
+    elif [[ "$health_battery_cycle_count" != "null" ||
+            "$health_battery_full_charge_capacity_mah" != "null" ]]; then
+      health_battery_condition="normal"
+    fi
+    if [[ "$health_battery_design_capacity_mah" != "null" &&
+          "$health_battery_full_charge_capacity_mah" != "null" &&
+          "$health_battery_design_capacity_mah" -gt 0 ]]; then
+      health_battery_health_percent="$(/usr/bin/awk \
+        -v full="$health_battery_full_charge_capacity_mah" \
+        -v design="$health_battery_design_capacity_mah" \
+        'BEGIN { value = full / design * 100; if (value > 200) value = 200; printf "%.1f", value }')"
+    fi
+    thermal_output="$(/usr/bin/pmset -g therm 2>/dev/null || true)"
+    thermal_output="$(printf '%s\n' "$thermal_output" | /usr/bin/tr '[:upper:]' '[:lower:]')"
+    if [[ "$thermal_output" == *'no thermal warning'* || "$thermal_output" == *'thermal level = 0'* ]]; then
+      health_thermal_state="nominal"
+    elif [[ "$thermal_output" == *critical* ]]; then
+      health_thermal_state="critical"
+    elif [[ "$thermal_output" == *serious* ]] ||
+         printf '%s\n' "$thermal_output" | /usr/bin/grep -Eq 'thermal (warning )?level[^0-9]*[1-9]'; then
+      health_thermal_state="serious"
+    elif [[ "$thermal_output" == *fair* ]]; then
+      health_thermal_state="fair"
+    else
+      health_thermal_state="unknown"
     fi
     lid_output="$(/usr/sbin/ioreg -r -k AppleClamshellState -d 4 2>/dev/null |
       /usr/bin/grep -m 1 AppleClamshellState || true)"
@@ -590,6 +674,19 @@ collect_health() {
     ''|*[!0-9]*) health_battery_percent="null" ;;
     *) [[ "$health_battery_percent" -le 100 ]] || health_battery_percent="null" ;;
   esac
+  case "$health_battery_condition" in
+    normal|service-recommended|unknown|null) ;;
+    *) health_battery_condition="unknown" ;;
+  esac
+  health_battery_cycle_count="$(normalize_nonnegative_integer "$health_battery_cycle_count")"
+  health_battery_design_capacity_mah="$(normalize_nonnegative_integer "$health_battery_design_capacity_mah")"
+  health_battery_full_charge_capacity_mah="$(normalize_nonnegative_integer "$health_battery_full_charge_capacity_mah")"
+  if ! [[ "$health_battery_health_percent" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+     ! /usr/bin/awk -v value="$health_battery_health_percent" \
+       'BEGIN { exit !(value >= 0 && value <= 200) }'; then
+    health_battery_health_percent="null"
+  fi
+  case "$health_thermal_state" in nominal|fair|serious|critical|unknown|null) ;; *) health_thermal_state="unknown" ;; esac
   case "$health_charging" in true|false|null) ;; *) health_charging="null" ;; esac
   case "$health_network_available" in true|false|null) ;; *) health_network_available="null" ;; esac
   case "$health_chrome_running" in true|false|null) ;; *) health_chrome_running="null" ;; esac
@@ -602,7 +699,10 @@ collect_health() {
     health_code=1
   elif [[ "$health_lid_closed" == "true" ||
           "$health_network_available" == "false" ||
-          "$health_chrome_running" == "false" ]]; then
+          "$health_chrome_running" == "false" ||
+          "$health_battery_condition" == "service-recommended" ||
+          "$health_thermal_state" == "serious" ||
+          "$health_thermal_state" == "critical" ]]; then
     health_state="degraded"
     health_code=2
   elif [[ "$health_battery_percent" != "null" &&
@@ -615,24 +715,34 @@ collect_health() {
 }
 
 health_json() {
-  printf '{"timestamp":"%s","version":"%s","health":"%s","mode":"%s","installed":%s,"service_state":"%s","pid":%s,"idle_sleep_prevented":%s,"power_source":"%s","battery_percent":%s,"charging":%s,"lid_closed":%s,"network_checked":%s,"network_available":%s,"chrome_checked":%s,"chrome_running":%s}\n' \
+  printf '{"timestamp":"%s","version":"%s","health":"%s","mode":"%s","installed":%s,"service_state":"%s","pid":%s,"idle_sleep_prevented":%s,"power_source":"%s","battery_percent":%s,"battery_condition":%s,"battery_cycle_count":%s,"battery_design_capacity_mah":%s,"battery_full_charge_capacity_mah":%s,"battery_health_percent":%s,"thermal_state":%s,"charging":%s,"lid_closed":%s,"network_checked":%s,"network_available":%s,"chrome_checked":%s,"chrome_running":%s}\n' \
     "$health_timestamp" "$VERSION" "$health_state" "$mode" "$status_installed" \
     "$(json_escape "$status_state")" "${status_pid:-null}" "$status_assertion" \
     "$(json_escape "$health_power_source")" "$health_battery_percent" \
+    "$(json_nullable_string "$health_battery_condition")" "$health_battery_cycle_count" \
+    "$health_battery_design_capacity_mah" "$health_battery_full_charge_capacity_mah" \
+    "$health_battery_health_percent" "$(json_nullable_string "$health_thermal_state")" \
     "$health_charging" "$health_lid_closed" "$check_network" \
     "$health_network_available" "$check_chrome" "$health_chrome_running"
 }
 
 health_text() {
   local battery_text="unknown"
+  local battery_health_text="unknown"
   [[ "$health_battery_percent" == "null" ]] ||
     battery_text="${health_battery_percent}%"
+  [[ "$health_battery_health_percent" == "null" ]] ||
+    battery_health_text="${health_battery_health_percent}%"
   printf 'Health:                %s\n' "$health_state"
   printf 'Mode:                  %s\n' "$mode"
   printf 'Service state:         %s\n' "$status_state"
   printf 'Idle sleep prevented:  %s\n' "$status_assertion"
   printf 'Power source:          %s\n' "$health_power_source"
   printf 'Battery:               %s\n' "$battery_text"
+  printf 'Battery condition:     %s\n' "$health_battery_condition"
+  printf 'Battery health:        %s\n' "$battery_health_text"
+  printf 'Battery cycles:        %s\n' "$health_battery_cycle_count"
+  printf 'Thermal state:         %s\n' "$health_thermal_state"
   printf 'Lid closed:            %s\n' "$health_lid_closed"
   [[ "$check_network" == "1" ]] &&
     printf 'Network available:     %s\n' "$health_network_available"
@@ -798,19 +908,122 @@ self_test() {
   [[ "$failed" == "0" ]]
 }
 
+version_is_older() {
+  local candidate="$1" installed="$2"
+  local candidate_major=0 candidate_minor=0 candidate_patch=0
+  local installed_major=0 installed_minor=0 installed_patch=0
+  IFS=. read -r candidate_major candidate_minor candidate_patch <<< "$candidate"
+  IFS=. read -r installed_major installed_minor installed_patch <<< "$installed"
+  [[ "$candidate_major" -lt "$installed_major" ]] && return 0
+  [[ "$candidate_major" -gt "$installed_major" ]] && return 1
+  [[ "$candidate_minor" -lt "$installed_minor" ]] && return 0
+  [[ "$candidate_minor" -gt "$installed_minor" ]] && return 1
+  [[ "$candidate_patch" -lt "$installed_patch" ]]
+}
+
+resolve_release_version() {
+  local requested="$1" effective="" resolved=""
+  if [[ "$requested" == "latest" ]]; then
+    effective="$("$CURL_BIN" --fail --silent --show-error --location \
+      --proto '=https' --proto-redir '=https' \
+      --output /dev/null --write-out '%{url_effective}' \
+      "$RELEASE_BASE_URL/releases/latest")" || return 1
+    resolved="${effective##*/}"
+  else
+    resolved="$requested"
+    [[ "$resolved" == v* ]] || resolved="v$resolved"
+  fi
+  [[ "$resolved" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf '%s\n' "$resolved"
+}
+
+prepare_release_source() {
+  local requested="$1" resolved="" package="" archive="" checksums=""
+  local expected="" actual="" entry=""
+  resolved="$(resolve_release_version "$requested")" ||
+    die "Could not resolve release '$requested'."
+  package="remote-mac-keepawake-$resolved"
+  release_tmp_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/rmka-release.XXXXXX")" ||
+    die "Could not create a private release staging directory."
+  /bin/chmod 0700 "$release_tmp_dir" || die "Could not protect release staging."
+  archive="$release_tmp_dir/$package.tar.gz"
+  checksums="$release_tmp_dir/SHA256SUMS"
+  "$CURL_BIN" --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    "$RELEASE_BASE_URL/releases/download/$resolved/$package.tar.gz" --output "$archive" ||
+    die "Could not download release archive $resolved."
+  "$CURL_BIN" --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    "$RELEASE_BASE_URL/releases/download/$resolved/SHA256SUMS" --output "$checksums" ||
+    die "Could not download release checksums $resolved."
+  expected="$(/usr/bin/awk -v name="$package.tar.gz" '$2 == name { print $1; exit }' "$checksums")"
+  actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ && "$actual" == "$expected" ]] ||
+    die "Release checksum verification failed; nothing was installed."
+  while IFS= read -r entry; do
+    [[ "$entry" == "$package/"* && "$entry" != *'/../'* && "$entry" != '../'* && "$entry" != /* ]] ||
+      die "Release archive contains an unsafe path."
+  done < <(/usr/bin/tar -tzf "$archive")
+  /usr/bin/tar -tvzf "$archive" | /usr/bin/awk '
+    substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d" { exit 1 }
+  ' || die "Release archive contains links or unsupported entry types."
+  /usr/bin/tar -xzf "$archive" -C "$release_tmp_dir" ||
+    die "Verified release archive could not be extracted."
+  release_source="$release_tmp_dir/$package/bin/$PROGRAM_NAME"
+  release_reporter_source="$release_tmp_dir/$package/bin/remote-mac-heartbeat"
+  [[ -f "$release_source" && -f "$release_reporter_source" ]] ||
+    die "Verified release does not contain both supported CLIs."
+  printf 'Verified release %s against SHA256SUMS before extraction.\n' "$resolved" >&2
+}
+
 upgrade_service() {
   local source="$upgrade_from"
   local staged=""
   local backup="${cli_path}.upgrade-backup.$$"
   local source_version=""
+  local installed_version=""
+  local reporter_path="$USER_BASE/.local/bin/remote-mac-heartbeat"
+  local reporter_source="" reporter_staged="" reporter_backup="" reporter_version=""
+  local upgrade_reporter="false"
+  release_tmp_dir=""
+  release_source=""
+  release_reporter_source=""
   require_system_privileges
-  [[ -n "$source" ]] || die "upgrade requires --from PATH."
+  [[ -z "$upgrade_from" || -z "$upgrade_release" ]] ||
+    die "Choose only one upgrade source: --from or --release."
+  if [[ -n "$upgrade_release" ]]; then
+    prepare_release_source "$upgrade_release"
+    source="$release_source"
+    reporter_source="$release_reporter_source"
+    trap '[[ -z "${release_tmp_dir:-}" ]] || /bin/rm -rf "$release_tmp_dir"' EXIT
+  fi
+  [[ -n "$source" ]] || die "upgrade requires --from PATH or --release latest|VERSION."
   [[ -f "$source" ]] || die "Upgrade source not found: $source"
   [[ -f "$cli_path" ]] || die "Stable CLI not found. Run install first."
+  service_is_healthy || die "The current service is not healthy; repair it before upgrading."
   /bin/bash -n "$source" || die "Upgrade source has invalid shell syntax."
   source_version="$(/usr/bin/awk -F'"' '/readonly VERSION=/{print $2; exit}' "$source")"
   [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
     die "Upgrade source does not declare a semantic version."
+  installed_version="$(/usr/bin/awk -F'"' '/readonly VERSION=/{print $2; exit}' "$cli_path")"
+  [[ "$installed_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    die "Installed CLI does not declare a semantic version."
+  if [[ "$allow_downgrade" != "1" ]] && version_is_older "$source_version" "$installed_version"; then
+    die "Refusing to downgrade from $installed_version to $source_version without --allow-downgrade."
+  fi
+  if [[ -n "$upgrade_release" && -f "$reporter_path" ]]; then
+    upgrade_reporter="true"
+    /bin/bash -n "$reporter_source" || die "Release heartbeat reporter has invalid shell syntax."
+    reporter_version="$(/usr/bin/awk -F'"' '/readonly VERSION=/{print $2; exit}' "$reporter_source")"
+    [[ "$reporter_version" == "$source_version" ]] ||
+      die "Release CLI and heartbeat reporter versions do not match."
+    reporter_staged="$(/usr/bin/mktemp "${reporter_path}.upgrade.XXXXXX")" ||
+      die "Could not stage the heartbeat reporter upgrade."
+    if ! /bin/cp "$reporter_source" "$reporter_staged" || ! /bin/chmod 0755 "$reporter_staged" ||
+       [[ "$("$reporter_staged" version 2>/dev/null)" != "remote-mac-heartbeat $source_version" ]]; then
+      /bin/rm -f "$reporter_staged"
+      die "Could not validate the staged heartbeat reporter."
+    fi
+    reporter_backup="${reporter_path}.upgrade-backup.$$"
+  fi
   staged="$(/usr/bin/mktemp "${cli_path}.upgrade.XXXXXX")" ||
     die "Could not stage the upgrade."
   if ! /bin/cp "$source" "$staged" || ! /bin/chmod 0755 "$staged"; then
@@ -822,18 +1035,35 @@ upgrade_service() {
     die "Staged upgrade did not report its declared version."
   fi
   if ! /bin/cp -p "$cli_path" "$backup" ||
+     { [[ "$upgrade_reporter" == "true" ]] && ! /bin/cp -p "$reporter_path" "$reporter_backup"; } ||
      ! fail_if_requested upgrade_copy ||
-     ! /bin/mv -f "$staged" "$cli_path"; then
-    /bin/rm -f "$staged"
+     ! /bin/mv -f "$staged" "$cli_path" ||
+     { [[ "$upgrade_reporter" == "true" ]] &&
+       { ! fail_if_requested upgrade_reporter_copy || ! /bin/mv -f "$reporter_staged" "$reporter_path"; }; }; then
+    /bin/rm -f "$staged" "$reporter_staged"
     [[ -f "$backup" ]] && /bin/mv -f "$backup" "$cli_path"
+    [[ -n "$reporter_backup" && -f "$reporter_backup" ]] && /bin/mv -f "$reporter_backup" "$reporter_path"
     die "Upgrade failed and the previous CLI was restored."
   fi
-  if [[ "$("$cli_path" version 2>/dev/null)" != "$PROGRAM_NAME $source_version" ]]; then
+  if [[ "$("$cli_path" version 2>/dev/null)" != "$PROGRAM_NAME $source_version" ]] ||
+     { [[ "$upgrade_reporter" == "true" ]] &&
+       [[ "$("$reporter_path" version 2>/dev/null)" != "remote-mac-heartbeat $source_version" ]]; } ||
+     ! "$cli_path" status "--$mode" --json >/dev/null 2>&1; then
     /bin/mv -f "$backup" "$cli_path"
-    die "Upgrade verification failed and the previous CLI was restored."
+    [[ -n "$reporter_backup" && -f "$reporter_backup" ]] && /bin/mv -f "$reporter_backup" "$reporter_path"
+    die "Upgrade health verification failed and the previous CLI was restored."
   fi
-  /bin/rm -f "$backup"
-  printf 'Upgraded stable CLI to %s and verified it.\n' "$source_version"
+  /bin/rm -f "$backup" "$reporter_backup"
+  if [[ -n "$release_tmp_dir" ]]; then
+    /bin/rm -rf "$release_tmp_dir"
+    release_tmp_dir=""
+    trap - EXIT
+  fi
+  if [[ "$upgrade_reporter" == "true" ]]; then
+    printf 'Upgraded both stable CLIs to %s and verified them.\n' "$source_version"
+  else
+    printf 'Upgraded stable CLI to %s and verified it.\n' "$source_version"
+  fi
 }
 
 case "$command_name" in

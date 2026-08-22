@@ -34,6 +34,7 @@ dashboard_version="$(/usr/bin/awk -F'"' '/"version":/{print $4; exit}' "$REPO_RO
 
 for path in README.md README.zh-CN.md docs/PRD.en.md docs/PRD.zh-CN.md \
   docs/ARCHITECTURE.md docs/ARCHITECTURE.zh-CN.md \
+  "docs/releases/v$version.md" \
   docs/assets/mac-pulse-synthetic.svg CONTRIBUTING.md CHANGELOG.md SECURITY.md \
   LICENSE; do
   require_file "$path"
@@ -44,6 +45,8 @@ require_text README.zh-CN.md "当前版本：v$version"
 require_text CHANGELOG.md "## [$version]"
 require_text docs/PRD.en.md "Product version | $version"
 require_text docs/PRD.zh-CN.md "产品版本 | $version"
+require_text "docs/releases/v$version.md" "## English"
+require_text "docs/releases/v$version.md" "## 简体中文"
 
 require_text README.md '[简体中文](README.zh-CN.md)'
 require_text README.md '[English PRD](docs/PRD.en.md)'
@@ -59,6 +62,8 @@ require_text docs/assets/mac-pulse-synthetic.svg 'SYNTHETIC DEMO DATA'
 require_text .github/workflows/release.yml 'README.zh-CN.md'
 require_text .github/workflows/release.yml 'docs/PRD.en.md'
 require_text .github/workflows/release.yml 'docs/PRD.zh-CN.md'
+require_text .github/workflows/release.yml 'docs/ARCHITECTURE.md'
+require_text .github/workflows/release.yml 'docs/releases/*.md'
 require_text .github/workflows/release.yml 'bin/remote-mac-heartbeat'
 require_text .github/workflows/release.yml 'dashboard/package.json'
 require_text .github/workflows/release.yml 'SBOM.spdx.json'

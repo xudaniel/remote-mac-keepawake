@@ -42,6 +42,11 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
+  async scheduled(_controller: ScheduledController, _env: Env, ctx: ExecutionContext): Promise<void> {
+    // Keep the cron-only D1 graph out of the HTML render path. This also makes
+    // the compiled fetch worker runnable in a plain Node smoke test.
+    ctx.waitUntil(import("../lib/alerts").then(({ runScheduledMonitoring }) => runScheduledMonitoring()));
+  },
 };
 
 export default worker;

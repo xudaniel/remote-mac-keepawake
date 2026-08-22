@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Product version | 1.3.0 |
+| Product version | 1.4.0 |
 | Document status | Release baseline |
 | Owner | Daniel Xu |
-| Last updated | 2026-08-21 |
+| Last updated | 2026-08-22 |
 | Platforms | macOS 14, 15, and 26 |
 | License | MIT |
 
@@ -19,9 +19,10 @@ available for remote administration by running macOS's built-in
 critical reliability defect: mutating commands report success only after the
 service state, managed PID, and active idle-sleep assertion are verified.
 
-Version 1.3.0 adds the optional Mac Pulse remote dashboard, complete retained
-history with exact timestamps, privacy-preserving alerts, and opt-in internet
-speed measurements. It does not expand the physical capabilities of the Mac.
+Version 1.4.0 hardens Mac Pulse with signed and rotatable heartbeats,
+autonomous retried alerts, battery-health and thermal history, privacy-preserving
+network fault isolation, and a checksum-verified release upgrade. It does not
+expand the physical capabilities of the Mac.
 Power, networking, lid behavior, hardware, operating-system failures, and
 FileVault pre-boot unlock remain outside the product boundary.
 
@@ -203,6 +204,9 @@ Failure outcome: the working user installation remains active.
 - `health --json` must use the schema in section 9.
 - Health exit codes must be 0 healthy, 1 unavailable, and 2 degraded.
 - Malformed sensor output must normalize to `null`, not malformed JSON.
+- Battery condition, cycle count, design capacity, full-charge capacity,
+  capacity-derived health, and thermal pressure must be collected read-only and
+  normalize unavailable values to `null`.
 
 ### FR-6: optional monitoring
 
@@ -230,6 +234,10 @@ Failure outcome: the working user installation remains active.
 - Replacement must be atomic and reversible.
 - Git and release archives must preserve executable modes.
 - Release assets must include SHA-256 checksums.
+- `upgrade --release` must download only over HTTPS, fail closed when checksum
+  verification or safe archive inspection fails, reject downgrades by default,
+  health-check the service after replacement, and restore the previous CLI on
+  failure. It must never update automatically in the background.
 
 ### FR-9: documentation and localization
 
@@ -245,6 +253,10 @@ Failure outcome: the working user installation remains active.
 
 - Production viewing must use the owner-only site identity; ingest authorization
   must remain separate and fail closed.
+- Each production heartbeat must have an HMAC-SHA-256 signature bound to its
+  key ID, transport timestamp, sample ID, request path, and body. The server
+  must enforce a five-minute replay window, throttle failures without retaining
+  source IP, and support bounded current/next/previous key rotation.
 - The first viewport must combine connection likelihood, exact local heartbeat
   time and age, next expected check-in, battery, charging, power, and primary
   risk without claiming a guaranteed root cause.
@@ -266,6 +278,15 @@ Failure outcome: the working user installation remains active.
 - Optional alerts must deduplicate active states, record distinct recoveries,
   keep destinations out of heartbeat data and Git, and send only a minimal
   event payload.
+- A one-minute Worker schedule must evaluate offline state under a D1 lease.
+  Delivery attempts, bounded retry backoff, final target, and final delivery
+  time must persist. A fallback webhook and scheduler canary are optional.
+- Opt-in network diagnostics must distinguish local route/gateway, DNS, public
+  HTTPS, and dashboard-ingest faults; record gateway latency, jitter, loss, and
+  an exact time at a configurable cached cadence; and never retain gateway,
+  DNS, SSID, public IP, or endpoint identifiers.
+  The HTTPS probe must be operator-configurable, timeout-bounded, and run at
+  reduced process priority.
 - The mobile dashboard must reflow at 320 CSS pixels, use visible keyboard
   focus, readable bilingual labels, semantic landmarks, live status
   announcements, and 44 CSS pixel primary controls.
@@ -304,6 +325,12 @@ Required fields:
 | `idle_sleep_prevented` | boolean | Matching assertion exists |
 | `power_source` | string | Parsed pmset power source |
 | `battery_percent` | number or null | Normalized battery percentage |
+| `battery_condition` | string or null | Normalized Apple battery condition |
+| `battery_cycle_count` | number or null | Read-only cycle count |
+| `battery_design_capacity_mah` | number or null | Design capacity |
+| `battery_full_charge_capacity_mah` | number or null | Current full-charge capacity |
+| `battery_health_percent` | number or null | Full/design capacity estimate |
+| `thermal_state` | string or null | Normalized macOS thermal-pressure state |
 | `charging` | boolean or null | Normalized charge state |
 | `lid_closed` | boolean or null | Normalized clamshell state |
 | `network_checked` | number | 1 only when explicitly requested |
@@ -326,6 +353,17 @@ until the first successful test.
 | `internet_latency_ms` | number or null | Idle round-trip latency |
 | `internet_responsiveness_rpm` | number or null | Round trips per minute; higher is better |
 | `internet_speed_measured_at` | string or null | UTC ISO-8601 time of the cached measurement |
+| `network_diagnostics_enabled` | boolean | Explicit reporter opt-in state |
+| `network_route_available` | boolean or null | Default route result |
+| `network_gateway_reachable` | boolean or null | Gateway probe result |
+| `network_dns_available` | boolean or null | DNS resolution result |
+| `network_https_available` | boolean or null | Public HTTPS result |
+| `network_ingest_reachable` | boolean or null | Dashboard ingest reachability |
+| `network_gateway_latency_ms` | number or null | Gateway mean latency |
+| `network_gateway_jitter_ms` | number or null | Gateway jitter |
+| `network_gateway_packet_loss_percent` | number or null | Gateway packet loss |
+| `network_fault` | string | Normalized fault category |
+| `network_diagnostics_measured_at` | string or null | Exact UTC measurement time |
 
 ## 10. Architecture
 
@@ -405,20 +443,26 @@ CI evidence:
 - English and Chinese document versions remain aligned;
 - release checksum validates the downloadable archive.
 
-## 14. v1.3.0 acceptance criteria
+## 14. v1.4.0 acceptance criteria
 
-- [ ] KeepAwake and heartbeat CLIs report version `1.3.0`.
-- [ ] Dashboard package reports version `1.3.0`.
+- [ ] KeepAwake and heartbeat CLIs report version `1.4.0`.
+- [ ] Dashboard package reports version `1.4.0`.
 - [ ] Reliability suite passes on supported macOS runners.
 - [ ] ShellCheck reports no findings.
 - [ ] Real launchd restart integration passes.
 - [ ] Heartbeat install, send, speed-cache, status, and uninstall tests pass.
+- [ ] Heartbeat signing, replay window, rotation, network diagnostics, and
+  credential-permission tests pass.
+- [ ] Autonomous scheduler lease, persistent retry, fallback, and canary tests
+  pass.
+- [ ] Battery-health and thermal parsing remain read-only and malformed-safe.
+- [ ] Release upgrade rejects checksum tampering and implicit downgrades.
 - [ ] Dashboard lint, build, route tests, and additive migration tests pass.
 - [ ] English and Chinese README files are complete and cross-linked.
 - [ ] English and Chinese PRDs are complete and cross-linked.
 - [ ] Documentation test confirms version and archive alignment.
 - [ ] Main branch CI passes after merge.
-- [ ] Tag `v1.3.0` points to the reviewed main commit.
+- [ ] Tag `v1.4.0` points to the reviewed main commit.
 - [ ] GitHub release contains source archives, project archive, and
   `SHA256SUMS`.
 - [ ] Downloaded project archive passes SHA-256 verification and contains both
@@ -434,7 +478,7 @@ CI evidence:
 4. Require green hosted CI and no unresolved review threads.
 5. Merge the exact reviewed head to main.
 6. Require green post-merge main CI.
-7. Create tag `v1.3.0` on the exact main commit.
+7. Create tag `v1.4.0` on the exact main commit.
 8. Verify release workflow success, asset names, archive content, and checksum.
 
 ## 16. Risks and mitigations
@@ -450,12 +494,12 @@ CI evidence:
 | Documentation drifts across languages | Run a version/link/archive documentation test in CI |
 | Release loses executable bit | Build archive with explicit `install -m 0755` |
 
-## 17. Roadmap after v1.3.0
+## 17. Roadmap after v1.4.0
 
 Potential future work, subject to separate review:
 
 - signed or notarized distribution without adding a privileged helper;
-- configurable network probe endpoint with strict privacy documentation;
+- externally verified controlled-outage drills for each alert provider;
 - machine-readable command schema documentation;
 - automated bilingual terminology checks;
 - an operator runbook for multiple remote Macs without centralized telemetry;

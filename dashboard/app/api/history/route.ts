@@ -15,6 +15,12 @@ type RawSample = {
   idle_sleep_prevented: number;
   power_source: string;
   battery_percent: number | null;
+  battery_condition: string | null;
+  battery_cycle_count: number | null;
+  battery_design_capacity_mah: number | null;
+  battery_full_charge_capacity_mah: number | null;
+  battery_health_percent: number | null;
+  thermal_state: string | null;
   charging: number | null;
   lid_closed: number | null;
   network_checked: number;
@@ -25,6 +31,17 @@ type RawSample = {
   internet_latency_ms: number | null;
   internet_responsiveness_rpm: number | null;
   internet_speed_measured_at: string | null;
+  network_diagnostics_enabled: number;
+  network_route_available: number | null;
+  network_gateway_reachable: number | null;
+  network_dns_available: number | null;
+  network_https_available: number | null;
+  network_ingest_reachable: number | null;
+  network_gateway_latency_ms: number | null;
+  network_gateway_jitter_ms: number | null;
+  network_gateway_packet_loss_percent: number | null;
+  network_fault: string | null;
+  network_diagnostics_measured_at: string | null;
   chrome_checked: number;
   chrome_running: number | null;
 };
@@ -56,6 +73,12 @@ function mapSample(row: RawSample) {
     idleSleepPrevented: Boolean(row.idle_sleep_prevented),
     powerSource: row.power_source,
     batteryPercent: row.battery_percent,
+    batteryCondition: row.battery_condition,
+    batteryCycleCount: row.battery_cycle_count,
+    batteryDesignCapacityMah: row.battery_design_capacity_mah,
+    batteryFullChargeCapacityMah: row.battery_full_charge_capacity_mah,
+    batteryHealthPercent: row.battery_health_percent,
+    thermalState: row.thermal_state,
     charging: nullableBoolean(row.charging),
     lidClosed: nullableBoolean(row.lid_closed),
     networkChecked: Boolean(row.network_checked),
@@ -66,6 +89,17 @@ function mapSample(row: RawSample) {
     internetLatencyMs: row.internet_latency_ms,
     internetResponsivenessRpm: row.internet_responsiveness_rpm,
     internetSpeedMeasuredAt: row.internet_speed_measured_at,
+    networkDiagnosticsEnabled: Boolean(row.network_diagnostics_enabled),
+    networkRouteAvailable: nullableBoolean(row.network_route_available),
+    networkGatewayReachable: nullableBoolean(row.network_gateway_reachable),
+    networkDnsAvailable: nullableBoolean(row.network_dns_available),
+    networkHttpsAvailable: nullableBoolean(row.network_https_available),
+    networkIngestReachable: nullableBoolean(row.network_ingest_reachable),
+    networkGatewayLatencyMs: row.network_gateway_latency_ms,
+    networkGatewayJitterMs: row.network_gateway_jitter_ms,
+    networkGatewayPacketLossPercent: row.network_gateway_packet_loss_percent,
+    networkFault: row.network_fault,
+    networkDiagnosticsMeasuredAt: row.network_diagnostics_measured_at,
     chromeChecked: Boolean(row.chrome_checked),
     chromeRunning: nullableBoolean(row.chrome_running),
   };
@@ -136,7 +170,7 @@ export async function GET(request: Request) {
         max_battery: summary?.max_battery ?? null,
         outage_seconds: outageSeconds,
         uptime_percent: observedSeconds > 0 ? Math.max(0, (observedSeconds - outageSeconds) / observedSeconds * 100) : total ? 100 : null,
-        approximate_storage_bytes: total * 256,
+        approximate_storage_bytes: total * 512,
         storage_is_estimate: true,
       },
     }, { headers: { "Cache-Control": "no-store, max-age=0" } });

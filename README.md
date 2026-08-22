@@ -8,7 +8,7 @@
 [English](README.md) | [简体中文](README.zh-CN.md)  
 [English PRD](docs/PRD.en.md) | [中文 PRD](docs/PRD.zh-CN.md)
 
-Current release: v1.3.0
+Current release: v1.4.0
 
 ![Mac Pulse synthetic dashboard preview](docs/assets/mac-pulse-synthetic.svg)
 
@@ -144,6 +144,8 @@ The default check stays local and reports:
 - launchd mode and service state;
 - managed PID and sleep assertion;
 - power source, battery percentage, and charging state;
+- battery condition, cycle count, design/full-charge capacity, estimated health,
+  and macOS thermal-pressure state;
 - MacBook lid state.
 
 Optional checks:
@@ -195,15 +197,33 @@ read -rs MAC_PULSE_SITES_TOKEN
 printf '%s\n%s\n' "$MAC_PULSE_INGEST_TOKEN" "$MAC_PULSE_SITES_TOKEN" | \
   ./bin/remote-mac-heartbeat install \
   --url https://your-private-dashboard.example/api/heartbeat \
-  --token-stdin --sites-token-stdin --user --internet-speed
+  --token-stdin --sites-token-stdin --key-id current --user \
+  --network-diagnostics --internet-speed
 unset MAC_PULSE_INGEST_TOKEN MAC_PULSE_SITES_TOKEN
 ./bin/remote-mac-heartbeat status
 ```
 
-The reporter runs every 60 seconds. It does not send hostname, username, IP
+The reporter runs every 60 seconds. Every upload is HMAC-SHA-256 signed with a
+key ID, transport timestamp, sample ID, and body digest; the server enforces a
+five-minute replay window and rate-limits failed authentication without storing
+source IP addresses. It does not send hostname, username, IP
 address, serial number, location, or credentials. The production site uses its
 owner-only identity session for viewing; its ingest key and private-site
 automation token remain separate.
+
+Rotate to a server-staged key without restarting the reporter:
+
+```bash
+read -rs MAC_PULSE_INGEST_TOKEN_NEXT
+printf '%s\n' "$MAC_PULSE_INGEST_TOKEN_NEXT" | \
+  ./bin/remote-mac-heartbeat rotate-key --key-id next --token-stdin
+unset MAC_PULSE_INGEST_TOKEN_NEXT
+```
+
+Configure `INGEST_TOKEN_NEXT` with key ID `next` on the server first, rotate
+the Mac, then promote the key. `INGEST_TOKEN_PREVIOUS` provides a bounded
+rollback slot. Legacy bearer-only ingestion is disabled in production unless
+`ALLOW_LEGACY_INGEST_BEARER=1` is deliberately set during migration.
 
 Before each upload, the reporter atomically saves the sample in a mode-`0700`
 private outbox. Transient failures use bounded retries; samples that still
@@ -215,8 +235,15 @@ preserves unsent samples for a later reinstall; a long outage can therefore
 grow local disk use until delivery resumes.
 
 `--internet-speed` uses Apple's built-in `networkQuality` on the remote Mac and
-automatically enables the basic network reachability check. The 60-second
-heartbeat reuses a cached result; a new speed test runs every 21,600 seconds
+automatically enables privacy-preserving network diagnostics. The diagnostics
+record only booleans, gateway latency/jitter/loss, a normalized fault category,
+and an exact measurement timestamp—never gateway, DNS, SSID, public IP, or
+endpoint identifiers. Enable them without a speed test using
+`--network-diagnostics`; the default diagnostic interval is 300 seconds. Override
+the local HTTPS reachability probe with a reviewed neutral endpoint using
+`--network-probe-url HTTPS_URL`. Probe processes run at reduced CPU priority and
+use strict timeouts. The 60-second heartbeat reuses a cached result; a new speed
+test runs every 21,600 seconds
 (6 hours) by default because each test transfers data and can briefly compete
 with remote-control traffic. Set a reviewed interval from 1,800 to 86,400
 seconds with `--speed-test-interval SECONDS`. Omit both flags to disable speed
@@ -231,11 +258,15 @@ exact timestamps follow the same retention, export, and deletion lifecycle.
 Replayed samples retain the time they were observed on the Mac rather than the
 later time at which the network accepted them.
 
-Optional remote alerts deduplicate outage, battery, power, KeepAwake, network,
-and Chrome Remote Desktop transitions and record recoveries. A server-side
-webhook destination is never included in the heartbeat. Reliable offline
-alerts require an external scheduler because an offline Mac cannot report its
-own outage.
+Optional remote alerts deduplicate outage, battery, battery-health, thermal,
+power, KeepAwake, network, and Chrome Remote Desktop transitions and record
+recoveries. The Cloudflare Worker checks offline state every minute under a D1
+lease, retries temporary delivery failures with bounded backoff, and can fail
+over to a second webhook. An optional external canary can verify that the
+scheduler itself is alive. Server-side webhook destinations are never included
+in heartbeat data.
+Battery-health alerts have configurable absolute and rapid-drop thresholds;
+non-critical thermal pressure must persist across two samples before alerting.
 
 ## Reboot and logout recovery
 
@@ -268,6 +299,26 @@ independent path such as SSH, and rerun the same system-mode check.
 
 ## Atomic upgrade
 
+Upgrade directly from a verified GitHub release:
+
+```bash
+sudo remote-mac-keepawake upgrade --system --release latest
+# Or pin an exact reviewed release:
+sudo remote-mac-keepawake upgrade --system --release 1.4.0
+```
+
+The CLI downloads the release archive and `SHA256SUMS` over HTTPS, rejects a
+missing or mismatched checksum and unsafe archive paths, verifies the candidate,
+then performs the same atomic replacement and health check. Downgrades require
+an explicit `--allow-downgrade`. If the optional heartbeat reporter is already
+installed, the verified release upgrades and rolls back both CLIs as one
+operation. There is no unattended background updater.
+
+If the command reports a failure, it restores the prior executable(s); repair
+the reported service or network problem, confirm `status --json`, and rerun the
+pinned version. Use `--allow-downgrade` only for a deliberately reviewed
+recovery release.
+
 Download or clone a reviewed version, then ask the installed CLI to validate
 and replace itself:
 
@@ -299,24 +350,25 @@ logs are preserved and their location is reported.
 
 Every semantic-version tag publishes:
 
-- generated GitHub release notes;
+- reviewed bilingual release notes when provided, otherwise generated notes;
 - GitHub source archives;
 - a mode-preserving project archive;
 - an SPDX software bill of materials;
 - `SHA256SUMS` and GitHub artifact provenance attestations.
 
-Verify a downloaded v1.3.0 archive:
+Verify a downloaded v1.4.0 archive:
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-tar -tzf remote-mac-keepawake-v1.3.0.tar.gz
-gh attestation verify remote-mac-keepawake-v1.3.0.tar.gz \
+tar -tzf remote-mac-keepawake-v1.4.0.tar.gz
+gh attestation verify remote-mac-keepawake-v1.4.0.tar.gz \
   --repo xudaniel/remote-mac-keepawake
 ```
 
 The archive includes both CLIs, Mac Pulse dashboard source and migrations,
 this English README, the [Chinese README](README.zh-CN.md), the
 [English PRD](docs/PRD.en.md), and the [Chinese PRD](docs/PRD.zh-CN.md).
+It also includes both architecture documents and version-specific release notes.
 
 ## Supported systems and CI
 
@@ -330,7 +382,8 @@ CI verifies:
 - rollback and cleanup boundaries;
 - valid JSON and plist output;
 - executable modes;
-- heartbeat reporter installation, sending, speed caching, and cleanup;
+- signed heartbeat installation, key rotation, replay, network diagnostics,
+  speed caching, and cleanup;
 - dashboard lint, build, route behavior, and additive D1 migrations;
 - bilingual documentation and release metadata;
 - a real LaunchAgent restart with a restored `pmset` assertion.

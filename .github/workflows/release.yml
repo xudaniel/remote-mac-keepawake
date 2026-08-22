@@ -54,11 +54,12 @@ jobs:
         run: |
           set -euo pipefail
           package="remote-mac-keepawake-$GITHUB_REF_NAME"
-          mkdir -p "dist/$package/bin" "dist/$package/docs"
+          mkdir -p "dist/$package/bin" "dist/$package/docs/releases"
           install -m 0755 bin/remote-mac-keepawake "dist/$package/bin/"
           install -m 0755 bin/remote-mac-heartbeat "dist/$package/bin/"
           install -m 0644 README.md README.zh-CN.md CHANGELOG.md SECURITY.md LICENSE "dist/$package/"
-          install -m 0644 docs/PRD.en.md docs/PRD.zh-CN.md "dist/$package/docs/"
+          install -m 0644 docs/PRD.en.md docs/PRD.zh-CN.md docs/ARCHITECTURE.md docs/ARCHITECTURE.zh-CN.md "dist/$package/docs/"
+          install -m 0644 docs/releases/*.md "dist/$package/docs/releases/"
           git archive --format=tar "$GITHUB_SHA" dashboard | tar -x -C "dist/$package"
           (cd dashboard && npm sbom --sbom-format spdx) > dist/SBOM.spdx.json
           tar -czf "dist/$package.tar.gz" -C dist "$package"
@@ -74,9 +75,14 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          dist/*.tar.gz dist/SHA256SUMS dist/SBOM.spdx.json
-          --verify-tag
-          --generate-notes
-          --title "$GITHUB_REF_NAME"
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes=(--generate-notes)
+          notes_file="docs/releases/$GITHUB_REF_NAME.md"
+          if [[ -s "$notes_file" ]]; then
+            notes=(--notes-file "$notes_file")
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.tar.gz dist/SHA256SUMS dist/SBOM.spdx.json \
+            --verify-tag "${notes[@]}" --title "$GITHUB_REF_NAME"

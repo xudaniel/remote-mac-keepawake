@@ -29,13 +29,21 @@ test("renders the private Mac Pulse dashboard shell", async () => {
 });
 
 test("checks separate view and ingest authorization before database access", async () => {
-  const [statusRoute, heartbeatRoute, auth] = await Promise.all([
+  const [statusRoute, heartbeatRoute, auth, signature] = await Promise.all([
     readFile(new URL("../app/api/status/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/heartbeat/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/heartbeat-signature.ts", import.meta.url), "utf8"),
   ]);
   assert.ok(statusRoute.indexOf("viewerAuthMode(request)") < statusRoute.indexOf("getDb()"));
-  assert.ok(heartbeatRoute.indexOf('isAuthorized(request, "INGEST_TOKEN")') < heartbeatRoute.indexOf("getDb()"));
+  assert.ok(heartbeatRoute.indexOf("authorizeHeartbeat(request, rawBody)") < heartbeatRoute.indexOf("getDb()"));
+  assert.match(signature, /HMAC/);
+  assert.match(auth, /x-mac-pulse-signature/);
+  assert.match(signature, /SIGNATURE_WINDOW_SECONDS = 300/);
+  assert.match(auth, /INGEST_TOKEN_NEXT/);
+  assert.match(auth, /recordAuthFailure/);
+  assert.match(auth, /cf-connecting-ip/);
+  assert.match(auth, /AUTH_RATE_LIMIT_SALT/);
   assert.match(auth, /oai-authenticated-user-id/);
   assert.match(auth, /isAuthorized\(request, "VIEW_TOKEN"\)/);
   assert.match(statusRoute, /Cache-Control.*no-store/);
@@ -44,11 +52,12 @@ test("checks separate view and ingest authorization before database access", asy
 });
 
 test("ships additive D1 migrations and no real secrets", async () => {
-  const [initialMigration, featureMigration, speedMigration, deliveryMigration, example, hosting] = await Promise.all([
+  const [initialMigration, featureMigration, speedMigration, deliveryMigration, observabilityMigration, example, hosting] = await Promise.all([
     readFile(new URL("../drizzle/0000_lumpy_susan_delgado.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0001_late_stranger.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0002_ambitious_lightspeed.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0003_lush_grim_reaper.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0004_v14_resilient_observability.sql", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
@@ -64,6 +73,11 @@ test("ships additive D1 migrations and no real secrets", async () => {
   assert.match(deliveryMigration, /UNIQUE INDEX/);
   assert.match(deliveryMigration, /reported_at_idx/);
   assert.doesNotMatch(deliveryMigration, /DROP TABLE|DELETE FROM/i);
+  assert.match(observabilityMigration, /battery_health_percent/);
+  assert.match(observabilityMigration, /network_gateway_jitter_ms/);
+  assert.match(observabilityMigration, /scheduler_runtime/);
+  assert.match(observabilityMigration, /auth_failures/);
+  assert.doesNotMatch(observabilityMigration, /DROP TABLE|DELETE FROM/i);
   assert.match(example, /replace-with-a-long-random-secret/);
   assert.match(example, /ALERT_WEBHOOK_URL/);
   assert.match(hosting, /"d1": "DB"/);
@@ -141,6 +155,45 @@ test("alert payload is minimal and alert transitions are durable", async () => {
   assert.doesNotMatch(alerts, /hostname|serial_number|username/);
   assert.match(route, /INGEST_TOKEN/);
   assert.match(migration, /delivery_error/);
+});
+
+test("scheduled alerts use a lease, retry queue, fallback, and canary", async () => {
+  const [alerts, worker, route, migration] = await Promise.all([
+    readFile(new URL("../lib/alerts.ts", import.meta.url), "utf8"),
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/alerts/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0004_v14_resilient_observability.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(worker, /scheduled\(/);
+  assert.match(worker, /runScheduledMonitoring/);
+  assert.match(alerts, /lease-held/);
+  assert.match(alerts, /RETRY_DELAYS_SECONDS/);
+  assert.match(alerts, /ALERT_FALLBACK_WEBHOOK_URL/);
+  assert.match(alerts, /SCHEDULER_CANARY_URL/);
+  assert.match(alerts, /battery_degradation_threshold/);
+  assert.match(alerts, /sustainedThermal/);
+  assert.match(route, /getSchedulerRuntime/);
+  assert.match(migration, /alert_events_retry_idx/);
+});
+
+test("hardware and network histories retain exact timestamps", async () => {
+  const [dashboard, heartbeat, history, historyExport, health] = await Promise.all([
+    readFile(new URL("../app/Dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/heartbeat/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/history/export/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/health.ts", import.meta.url), "utf8"),
+  ]);
+  for (const source of [heartbeat, history, historyExport, health]) {
+    assert.match(source, /battery_health_percent|batteryHealthPercent/);
+    assert.match(source, /network_diagnostics_measured_at|networkDiagnosticsMeasuredAt/);
+  }
+  assert.match(dashboard, /Battery health & thermal pressure/);
+  assert.match(dashboard, /Network fault \/ measured/);
+  assert.match(dashboard, /gateway latency/);
+  assert.match(dashboard, /Battery health trend/);
+  assert.match(dashboard, /Gateway reliability trend/);
+  assert.match(historyExport, /network_gateway_packet_loss_percent/);
 });
 
 test("dashboard includes actionable diagnostics and accessibility safeguards", async () => {
