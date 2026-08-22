@@ -1,5 +1,6 @@
 import { getD1 } from "../../../db";
 import { unauthorized, viewerAuthMode } from "../../../lib/auth";
+import { viewerCorsPreflight, withViewerCors } from "../../../lib/cors";
 import { historyWhere, parseCursor, parseHistoryBounds, parsePageLimit } from "../../../lib/history";
 
 type RawSample = {
@@ -106,13 +107,13 @@ function mapSample(row: RawSample) {
 }
 
 export async function GET(request: Request) {
-  if (!viewerAuthMode(request)) return unauthorized();
+  if (!viewerAuthMode(request)) return withViewerCors(request, unauthorized());
   const url = new URL(request.url);
   const bounds = parseHistoryBounds(url);
   const limit = parsePageLimit(url.searchParams.get("limit"));
   const cursor = parseCursor(url.searchParams.get("cursor"));
   if (!bounds || limit === null || Number.isNaN(cursor)) {
-    return Response.json({ error: "Invalid history range, cursor, or limit" }, { status: 400 });
+    return withViewerCors(request, Response.json({ error: "Invalid history range, cursor, or limit" }, { status: 400 }));
   }
 
   try {
@@ -155,7 +156,7 @@ export async function GET(request: Request) {
     const observedSeconds = Math.max(0, Math.floor((lastMs - firstMs) / 1_000));
     const outageSeconds = Math.min(observedSeconds, Number(outage?.outage_seconds ?? 0));
 
-    return Response.json({
+    return withViewerCors(request, Response.json({
       range: bounds.range,
       from: bounds.from,
       to: bounds.to,
@@ -173,10 +174,14 @@ export async function GET(request: Request) {
         approximate_storage_bytes: total * 512,
         storage_is_estimate: true,
       },
-    }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    }, { headers: { "Cache-Control": "no-store, max-age=0" } }));
   } catch {
-    return Response.json({ error: "History storage is temporarily unavailable" }, { status: 503 });
+    return withViewerCors(request, Response.json({ error: "History storage is temporarily unavailable" }, { status: 503 }));
   }
+}
+
+export async function OPTIONS(request: Request) {
+  return viewerCorsPreflight(request);
 }
 
 export async function DELETE(request: Request) {

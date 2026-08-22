@@ -4,6 +4,27 @@ Mac Pulse is the optional remote dashboard for Remote Mac KeepAwake. It records
 minimal health heartbeats outside the monitored Mac, so a stale heartbeat can
 indicate that the Mac is asleep, offline, or powered down.
 
+## GitHub Pages live viewer
+
+The public static viewer is deployed from `pages/` to
+`https://xudaniel.github.io/remote-mac-keepawake/`. Its default mode uses only
+synthetic data. Connected mode makes read-only requests to `/api/status` and
+`/api/history`; it does not expose history deletion or heartbeat ingestion.
+
+To authorize the exact GitHub Pages origin, configure the dashboard runtime:
+
+```text
+PUBLIC_VIEWER_ORIGIN=https://xudaniel.github.io
+```
+
+Then enter the dashboard origin and its separate `VIEW_TOKEN` in the viewer.
+The viewer stores credentials only in the current tab's `sessionStorage`, uses
+no analytics or third-party scripts, and never adds credentials to a URL. An
+optional hosting access token can be sent in `OAI-Sites-Authorization` when the
+edge layer supports authenticated cross-origin preflight. Never enter the
+heartbeat ingest/signing key in the public viewer. Use a trusted browser and
+disconnect when finished.
+
 ## What the dashboard shows
 
 - an actionable connection summary, exact local heartbeat timestamp, age, and

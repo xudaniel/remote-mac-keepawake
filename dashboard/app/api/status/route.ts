@@ -2,6 +2,7 @@ import { desc } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { healthSamples } from "../../../db/schema";
 import { unauthorized, viewerAuthMode } from "../../../lib/auth";
+import { viewerCorsPreflight, withViewerCors } from "../../../lib/cors";
 
 const OFFLINE_AFTER_SECONDS = 90;
 const EXPECTED_CHECK_IN_SECONDS = 60;
@@ -9,7 +10,7 @@ const STALE_AFTER_SECONDS = 75;
 
 export async function GET(request: Request) {
   const viewerAuth = viewerAuthMode(request);
-  if (!viewerAuth) return unauthorized();
+  if (!viewerAuth) return withViewerCors(request, unauthorized());
 
   try {
     const db = getDb();
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
   const awake = Boolean(online && latest?.serviceState === "running" && latest.idleSleepPrevented);
   const overall = !online ? "offline" : !awake ? "unprotected" : ageSeconds !== null && ageSeconds > STALE_AFTER_SECONDS ? "stale" : "healthy";
 
-    return Response.json(
+    return withViewerCors(request, Response.json(
       {
         server_time: new Date(now).toISOString(),
         viewer_auth: viewerAuth,
@@ -45,11 +46,15 @@ export async function GET(request: Request) {
         })),
       },
       { headers: { "Cache-Control": "no-store, max-age=0" } },
-    );
+    ));
   } catch {
-    return Response.json(
+    return withViewerCors(request, Response.json(
       { error: "Status storage is temporarily unavailable" },
       { status: 503, headers: { "Cache-Control": "no-store" } },
-    );
+    ));
   }
+}
+
+export async function OPTIONS(request: Request) {
+  return viewerCorsPreflight(request);
 }

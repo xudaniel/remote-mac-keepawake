@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#07100f">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http://localhost:*; font-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests">
+    <meta name="description" content="Mac Pulse live viewer for Remote Mac KeepAwake. Demo data is synthetic; private credentials remain in the browser session.">
+    <title>Mac Pulse — Live Remote Mac Monitor</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./app.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to dashboard</a>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Mac Pulse home">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <span>
+          <strong>Mac Pulse</strong>
+          <small data-i18n="brandSubtitle">Remote Mac Monitor</small>
+        </span>
+      </a>
+      <nav aria-label="Primary">
+        <a href="https://github.com/xudaniel/remote-mac-keepawake" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <button class="quiet-button" id="language-button" type="button" aria-label="Switch language">中文</button>
+        <button class="connect-button" id="connect-button" type="button" data-i18n="connect">Connect private data</button>
+      </nav>
+    </header>
+
+    <main id="main" class="shell">
+      <section class="mode-banner" id="mode-banner" aria-live="polite">
+        <span class="mode-dot" aria-hidden="true"></span>
+        <strong id="mode-title">Public demo</strong>
+        <span id="mode-copy">All Mac readings shown here are synthetic.</span>
+        <button id="disconnect-button" class="text-button" type="button" hidden data-i18n="disconnect">Disconnect</button>
+      </section>
+
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow" data-i18n="eyebrow">Unattended Mac status</p>
+          <h1 id="hero-title">Your Mac, at a glance.</h1>
+          <p class="hero-copy" data-i18n="heroCopy">See awake protection, power, battery health and network quality without publishing machine identity.</p>
+          <div class="sync-line">
+            <span id="sync-label">Demo refreshed</span>
+            <time id="sync-time" datetime="">—</time>
+            <button id="refresh-button" type="button" class="icon-button" aria-label="Refresh data" title="Refresh data">↻</button>
+          </div>
+        </div>
+        <div class="pulse-summary" id="pulse-summary">
+          <div class="pulse-orb" aria-hidden="true"><span></span></div>
+          <div>
+            <p class="status-kicker" data-i18n="currentState">Current state</p>
+            <strong id="overall-state">Awake &amp; protected</strong>
+            <p id="overall-detail">Heartbeat received 4 seconds ago</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="metric-grid" aria-label="Current Mac status">
+        <article class="metric-card metric-featured">
+          <div class="metric-heading">
+            <span class="metric-icon" aria-hidden="true">↯</span>
+            <span data-i18n="battery">Battery</span>
+          </div>
+          <div class="battery-readout">
+            <strong id="battery-percent">83%</strong>
+            <div class="battery-shell" aria-hidden="true"><span id="battery-bar"></span></div>
+          </div>
+          <p id="battery-detail">Charging on AC power</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-heading"><span class="metric-icon" aria-hidden="true">●</span><span>KeepAwake</span></div>
+          <strong class="metric-value good" id="keepawake-state">Active</strong>
+          <p id="keepawake-detail">launchd running · assertion verified</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-heading"><span class="metric-icon" aria-hidden="true">⌁</span><span data-i18n="network">Network</span></div>
+          <strong class="metric-value good" id="network-state">Healthy</strong>
+          <p id="network-detail">Route, DNS, HTTPS and ingest pass</p>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-heading"><span class="metric-icon" aria-hidden="true">◌</span><span data-i18n="hardware">Hardware</span></div>
+          <strong class="metric-value" id="hardware-state">91.6% health</strong>
+          <p id="hardware-detail">143 cycles · thermal nominal</p>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel trend-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow" data-i18n="last24Hours">Last 24 hours</p>
+              <h2 data-i18n="batteryHistory">Battery history</h2>
+            </div>
+            <span class="panel-stat" id="history-range">79–86%</span>
+          </div>
+          <div class="chart-wrap">
+            <svg id="battery-chart" viewBox="0 0 720 230" role="img" aria-labelledby="chart-title chart-description">
+              <title id="chart-title">Battery percentage history</title>
+              <desc id="chart-description">Synthetic demo battery readings over the last 24 hours.</desc>
+              <g class="chart-grid" aria-hidden="true">
+                <line x1="46" y1="24" x2="700" y2="24"></line>
+                <line x1="46" y1="82" x2="700" y2="82"></line>
+                <line x1="46" y1="140" x2="700" y2="140"></line>
+                <line x1="46" y1="198" x2="700" y2="198"></line>
+              </g>
+              <path id="chart-area" class="chart-area" d=""></path>
+              <polyline id="chart-line" class="chart-line" points=""></polyline>
+              <g id="chart-labels" class="chart-labels"></g>
+            </svg>
+          </div>
+          <div class="chart-legend"><span><i class="legend-green"></i><span data-i18n="batteryLevel">Battery level</span></span><span id="history-samples">36 exact-timestamp samples</span></div>
+        </article>
+
+        <article class="panel speed-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow" data-i18n="remoteMacTest">Remote Mac test</p><h2 data-i18n="internetSpeed">Internet speed</h2></div>
+            <span class="health-pill" id="speed-health">Excellent</span>
+          </div>
+          <div class="speed-primary">
+            <div><span>↓</span><strong id="download-speed">527</strong><small>Mbps <b data-i18n="download">download</b></small></div>
+            <div><span>↑</span><strong id="upload-speed">63</strong><small>Mbps <b data-i18n="upload">upload</b></small></div>
+          </div>
+          <dl class="speed-details">
+            <div><dt data-i18n="latency">Latency</dt><dd id="latency">18 ms</dd></div>
+            <div><dt data-i18n="jitter">Jitter</dt><dd id="jitter">2.4 ms</dd></div>
+            <div><dt data-i18n="packetLoss">Packet loss</dt><dd id="packet-loss">0%</dd></div>
+          </dl>
+          <p class="exact-time"><span data-i18n="measured">Measured</span> <time id="network-time" datetime="">—</time></p>
+        </article>
+      </section>
+
+      <section class="content-grid lower-grid">
+        <article class="panel diagnostics-panel">
+          <div class="panel-heading"><div><p class="eyebrow" data-i18n="faultIsolation">Fault isolation</p><h2 data-i18n="diagnostics">Network diagnostics</h2></div><span class="health-pill">5 / 5</span></div>
+          <ul class="diagnostic-list">
+            <li><span><i></i><b data-i18n="defaultRoute">Default route</b></span><strong id="diag-route">Available</strong></li>
+            <li><span><i></i><b data-i18n="gateway">Gateway</b></span><strong id="diag-gateway">Reachable</strong></li>
+            <li><span><i></i><b>DNS</b></span><strong id="diag-dns">Resolved</strong></li>
+            <li><span><i></i><b>HTTPS</b></span><strong id="diag-https">Available</strong></li>
+            <li><span><i></i><b data-i18n="dashboardIngest">Dashboard ingest</b></span><strong id="diag-ingest">Reachable</strong></li>
+          </ul>
+        </article>
+
+        <article class="panel timeline-panel">
+          <div class="panel-heading"><div><p class="eyebrow" data-i18n="exactTimestamps">Exact timestamps</p><h2 data-i18n="recentSamples">Recent samples</h2></div><span class="health-pill" id="uptime">100% uptime</span></div>
+          <ol class="timeline" id="timeline"></ol>
+        </article>
+      </section>
+
+      <section class="privacy-panel">
+        <span class="privacy-icon" aria-hidden="true">⌾</span>
+        <div><h2 data-i18n="privacyTitle">Private by design</h2><p data-i18n="privacyCopy">No analytics, no third-party scripts and no permanent credential storage. Connected-mode secrets stay in sessionStorage and disappear when the browser session ends.</p></div>
+        <a href="https://github.com/xudaniel/remote-mac-keepawake/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer" data-i18n="securityPolicy">Security policy ↗</a>
+      </section>
+    </main>
+
+    <footer>
+      <span>Mac Pulse v1.4.0 · MIT · Daniel Xu</span>
+      <span data-i18n="footerBoundary">Prevents idle sleep; it cannot overcome power, network, closed-lid or FileVault failures.</span>
+    </footer>
+
+    <dialog id="connection-dialog" aria-labelledby="dialog-title">
+      <form id="connection-form" method="dialog">
+        <button class="dialog-close" id="dialog-close" type="button" aria-label="Close">×</button>
+        <p class="eyebrow" data-i18n="privateConnection">Private connection</p>
+        <h2 id="dialog-title" data-i18n="connectTitle">Connect your Mac Pulse API</h2>
+        <p data-i18n="connectCopy">Use a reviewed HTTPS dashboard endpoint. Values stay in this browser tab and are never added to the URL or GitHub.</p>
+        <label><span data-i18n="apiOrigin">Dashboard origin</span><input id="api-origin" name="api-origin" type="url" inputmode="url" placeholder="https://mac-pulse.example.com" autocomplete="off" spellcheck="false" required></label>
+        <label><span data-i18n="viewToken">View token</span><input id="view-token" name="view-token" type="password" autocomplete="off" spellcheck="false" required></label>
+        <label><span data-i18n="edgeToken">Hosting access token (optional)</span><input id="edge-token" name="edge-token" type="password" autocomplete="off" spellcheck="false"><small data-i18n="edgeTokenHelp">Only needed when the hosting layer requires its own automation header.</small></label>
+        <div class="dialog-warning"><strong data-i18n="neverUseIngest">Never enter the heartbeat ingest/signing key here.</strong><span data-i18n="corsHelp">The API must allow this GitHub Pages origin with PUBLIC_VIEWER_ORIGIN.</span></div>
+        <p class="form-error" id="connection-error" role="alert" hidden></p>
+        <button class="dialog-submit" type="submit" data-i18n="connectNow">Connect securely</button>
+      </form>
+    </dialog>
+
+    <noscript>This app needs JavaScript to render live dashboard data.</noscript>
+  </body>
+</html>

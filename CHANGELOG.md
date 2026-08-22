@@ -4,6 +4,21 @@ All notable changes follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- A bilingual, mobile-first GitHub Pages live viewer with an explicit synthetic
+  demo mode, exact-timestamp battery and network history, installable PWA
+  metadata, and a 10-second refresh loop.
+- Optional read-only connection to an operator-authorized Mac Pulse API. Viewer
+  credentials remain in per-tab `sessionStorage`; a strict configured-origin
+  CORS policy exposes only status and history reads.
+
+### Security
+
+- The public viewer contains no analytics or third-party runtime assets, never
+  accepts the heartbeat ingest/signing key, and does not put credentials in a
+  URL or persistent browser storage.
+
 ## [1.4.0] - 2026-08-22
 
 ### Added
