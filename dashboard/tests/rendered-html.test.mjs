@@ -2,24 +2,21 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function worker() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  return (await import(workerUrl.href)).default;
-}
+// Exercise the built artifact in Workers: vinext may emit cloudflare: imports.
+// Plain Node cannot load those modules or provide the Workers runtime bindings.
+import { unstable_dev } from "wrangler";
 
-const context = {
-  waitUntil() {},
-  passThroughOnException() {},
-};
-
-test("renders the private Mac Pulse dashboard shell", async () => {
-  const app = await worker();
-  const response = await app.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    context,
-  );
+test("renders the private Mac Pulse dashboard shell", async (t) => {
+  const app = await unstable_dev("dist/server/index.js", {
+    config: "dist/server/wrangler.json",
+    local: true,
+    persist: false,
+    port: 0,
+    logLevel: "error",
+    experimental: { disableExperimentalWarning: true, watch: false },
+  });
+  t.after(() => app.stop());
+  const response = await app.fetch("/", { headers: { accept: "text/html" } });
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>Mac Pulse — Remote Mac Monitor<\/title>/);
